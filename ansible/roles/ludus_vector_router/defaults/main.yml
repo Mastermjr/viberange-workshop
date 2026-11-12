@@ -1,0 +1,13 @@
+---
+ludus_vector_router_version: "0.58.0"
+ludus_vector_router_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+ludus_vector_router_aggregator_address: "10.{{ range_second_octet }}.10.10:6000"
+ludus_vector_router_zeek_globs:
+  - "/opt/zeek/logs/current/*.log"
+  - "/var/log/zeek/current/*.log"
+ludus_vector_router_artifact_globs:
+  - "/var/log/viberange-router/pcap-artifacts.jsonl"
+ludus_vector_router_disk_buffer_bytes: 268435488
+ludus_vector_router_range_id: "{{ range_id }}"
+ludus_vector_router_target: "{{ range_id }}-router-debian12-x64"
+ludus_vector_router_source_host: "{{ range_id }}-router"

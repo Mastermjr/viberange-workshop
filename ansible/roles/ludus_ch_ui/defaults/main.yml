@@ -1,0 +1,17 @@
+---
+ludus_ch_ui_version: "2.32.0"
+ludus_ch_ui_sha256: "eb1fa7973e7c5a010fbb12c36dda65ee3b7442e277662499e2e95a29701ffe89"
+ludus_ch_ui_download_url: "https://github.com/caioricciuti/ch-ui/releases/download/v{{ ludus_ch_ui_version }}/ch-ui-linux-amd64"
+ludus_ch_ui_port: 3488
+ludus_ch_ui_bind_host: "0.0.0.0"
+ludus_ch_ui_clickhouse_url: "http://127.0.0.1:8123"
+ludus_ch_ui_connection_name: "VibeRange {{ range_id }}"
+ludus_ch_ui_database_path: "/var/lib/ch-ui/ch-ui.db"
+ludus_ch_ui_bootstrap_username: "default"
+ludus_ch_ui_bootstrap_password: ""
+ludus_ch_ui_seed_catalog: true
+ludus_ch_ui_range_id: "{{ range_id }}"
+ludus_ch_ui_reader_username: "viberange_reader"
+ludus_ch_ui_reader_password_file: "/var/lib/ch-ui/participant-password"
+ludus_ch_ui_reader_handoff_file: "/var/lib/ch-ui/participant-login.txt"
+ludus_ch_ui_validate_restart: false

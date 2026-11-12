@@ -1,0 +1,3 @@
+[submodule "references/ludus"]
+	path = references/ludus
+	url = https://gitlab.com/badsectorlabs/ludus.git

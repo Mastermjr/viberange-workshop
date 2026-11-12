@@ -1,0 +1,110 @@
+---
+- name: Install detection runtime
+  become: true
+  ansible.builtin.apt:
+    name: [python3, python3-yaml]
+    state: present
+    update_cache: true
+
+- name: Create detection service account
+  become: true
+  ansible.builtin.user:
+    name: viberange-detection
+    system: true
+    home: /var/lib/viberange-detection
+    shell: /usr/sbin/nologin
+
+- name: Create detection directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: viberange-detection
+    group: viberange-detection
+    mode: "0750"
+  loop:
+    - /opt/viberange-detection
+    - /opt/viberange-detection/rules
+    - /opt/viberange-detection/queries
+    - /var/lib/viberange-detection
+
+- name: Install detection receiver and runner
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/opt/viberange-detection/{{ item }}"
+    owner: root
+    group: viberange-detection
+    mode: "0750"
+  loop: [receiver.py, runner.py]
+
+- name: Install detection rules
+  become: true
+  ansible.builtin.copy:
+    src: rules/
+    dest: /opt/viberange-detection/rules/
+    owner: root
+    group: viberange-detection
+    mode: "0640"
+
+- name: Install participant-review SQL queries
+  become: true
+  ansible.builtin.copy:
+    src: queries/
+    dest: /opt/viberange-detection/queries/
+    owner: root
+    group: viberange-detection
+    mode: "0640"
+
+- name: Install detection systemd units
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - viberange-detection-receiver.service
+    - viberange-detection-runner.service
+
+- name: Enable and restart detection services
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: restarted
+  loop:
+    - viberange-detection-receiver.service
+    - viberange-detection-runner.service
+
+- name: Wait for detection receiver health
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9100/healthz
+    return_content: true
+  register: receiver_health
+  retries: 20
+  delay: 2
+  until: receiver_health.status == 200
+
+- name: Exercise detection output path
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9100/detections
+    method: POST
+    body_format: json
+    body:
+      rule_id: role-smoke
+      rule_name: Role deployment smoke detection
+      severity: informational
+      matched_source: defender
+      matched_host: clickhouse-ir
+      experiment_run: role-smoke
+      matches: []
+    status_code: 202
+
+- name: Verify smoke detection in ClickHouse
+  ansible.builtin.command: clickhouse-client --query "SELECT count() FROM ir.detections WHERE rule_id='role-smoke'"
+  register: smoke_detection_count
+  changed_when: false
+  failed_when: smoke_detection_count.stdout | int < 1

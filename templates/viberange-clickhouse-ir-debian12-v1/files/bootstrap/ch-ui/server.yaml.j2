@@ -1,0 +1,16 @@
+port: {{ ludus_ch_ui_port }}
+app_url: "http://{{ ansible_default_ipv4.address }}:{{ ludus_ch_ui_port }}"
+database_path: "{{ ludus_ch_ui_database_path }}"
+clickhouse_url: "{{ ludus_ch_ui_clickhouse_url }}"
+connection_name: "{{ ludus_ch_ui_connection_name }}"
+session_max_age: 28800
+allow_login_url: false
+trusted_proxies: []
+export_max_bytes: 268435456
+export_max_rows: 100000
+# Ingest listeners are intentionally disabled. Vector remains the only workshop
+# telemetry transport and central ClickHouse writer.
+ingest_addr: ""
+ingest_only_separate: true
+audit_log_file: "/var/log/ch-ui/audit.jsonl"
+audit_forward_stdout: false

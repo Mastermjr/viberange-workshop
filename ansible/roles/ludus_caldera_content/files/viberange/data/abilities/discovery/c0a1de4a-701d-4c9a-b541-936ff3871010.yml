@@ -1,0 +1,14 @@
+---
+- id: c0a1de4a-701d-4c9a-b541-936ff3871010
+  name: VibeRange prove bounded k3s host control
+  description: Read only host identity and OS release information through the validated host mount.
+  tactic: discovery
+  technique:
+    attack_id: T1082
+    name: System Information Discovery
+  platforms:
+    linux:
+      sh:
+        command: >-
+          command_b64=$(printf '%s' 'chroot #{viberange.target.host_mount} /bin/hostname; chroot #{viberange.target.host_mount} /bin/cat /etc/os-release | head -8; printf "VIBERANGE_HOST_CONTROL=%s\\n" "#{viberange.run.id}"' | base64 -w0); /usr/local/bin/viberange-gotty-exec --url "http://#{viberange.target.ip}:#{viberange.target.system_monitor_port}" --command-b64 "$command_b64"
+        timeout: 60

@@ -1,0 +1,14 @@
+[Unit]
+Description=Restricted VibeRange experiment router control SSH
+After=network-online.target ssh.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/sshd -t -f {{ ludus_experiment_cli_router_sshd_config }}
+ExecStart=/usr/sbin/sshd -D -e -f {{ ludus_experiment_cli_router_sshd_config }}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

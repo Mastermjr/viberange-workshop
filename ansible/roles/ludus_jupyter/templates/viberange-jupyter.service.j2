@@ -1,0 +1,28 @@
+[Unit]
+Description=VibeRange participant JupyterLab
+After=network-online.target clickhouse-server.service
+Wants=network-online.target
+Requires=clickhouse-server.service
+
+[Service]
+Type=simple
+User={{ ludus_jupyter_user }}
+Group={{ ludus_jupyter_group }}
+Environment=SHELL={{ ludus_jupyter_shell }}
+WorkingDirectory={{ ludus_jupyter_state_dir }}
+# Jupyter has no application credential. The assigned per-client WireGuard
+# firewall rule is the access boundary; XSRF and WebSocket-origin checks remain enabled.
+ExecStart={{ ludus_jupyter_venv }}/bin/jupyter-lab --no-browser --ServerApp.ip={{ ludus_jupyter_bind }} --ServerApp.port={{ ludus_jupyter_port }} --ServerApp.root_dir={{ ludus_jupyter_state_dir }} --IdentityProvider.token= --PasswordIdentityProvider.hashed_password= --ServerApp.allow_remote_access=True
+Restart=on-failure
+RestartSec=3
+# Participants own the disposable analysis VM. The terminal user has explicit
+# passwordless sudo, so do not place the service in a no-new-privileges or
+# read-only mount namespace that would make approved sudo misleading.
+NoNewPrivileges=false
+PrivateTmp=false
+PrivateDevices=false
+ProtectHome=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target

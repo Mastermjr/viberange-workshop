@@ -1,0 +1,109 @@
+---
+# @decision DEC-CLICKHOUSE-001: Wrap ClickHouse's tested static installer rather
+# than duplicating its user, directory, and base-config creation logic.
+- name: Install ClickHouse prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [curl, ca-certificates]
+    state: present
+    update_cache: true
+
+- name: Read installed ClickHouse common-static version
+  ansible.builtin.command: dpkg-query -W -f=${Version} clickhouse-common-static
+  register: clickhouse_installed_version
+  changed_when: false
+  failed_when: false
+
+- name: Download pinned ClickHouse common-static package
+  become: true
+  ansible.builtin.get_url:
+    url: "https://github.com/ClickHouse/ClickHouse/releases/download/v{{ ludus_clickhouse_ir_version }}-lts/clickhouse-common-static_{{ ludus_clickhouse_ir_version }}_amd64.deb"
+    dest: "/usr/local/src/clickhouse-common-static_{{ ludus_clickhouse_ir_version }}_amd64.deb"
+    checksum: "sha256:{{ ludus_clickhouse_ir_common_static_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: clickhouse_installed_version.stdout != ludus_clickhouse_ir_version
+
+- name: Install pinned ClickHouse common-static package
+  become: true
+  ansible.builtin.apt:
+    deb: "/usr/local/src/clickhouse-common-static_{{ ludus_clickhouse_ir_version }}_amd64.deb"
+    state: present
+    allow_downgrade: true
+  when: clickhouse_installed_version.stdout != ludus_clickhouse_ir_version
+
+- name: Check ClickHouse base configuration
+  ansible.builtin.stat:
+    path: /etc/clickhouse-server/config.xml
+  register: clickhouse_base_config
+
+- name: Install ClickHouse base layout
+  become: true
+  ansible.builtin.command: /usr/bin/clickhouse install --noninteractive
+  when: not clickhouse_base_config.stat.exists
+
+- name: Configure ClickHouse network listeners
+  become: true
+  ansible.builtin.template:
+    src: network.xml.j2
+    dest: /etc/clickhouse-server/config.d/network.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0644"
+  register: clickhouse_network
+
+- name: Install ClickHouse systemd unit
+  become: true
+  ansible.builtin.template:
+    src: clickhouse-server.service.j2
+    dest: /etc/systemd/system/clickhouse-server.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: clickhouse_unit
+
+- name: Stop unmanaged ClickHouse daemon before first systemd adoption
+  become: true
+  ansible.builtin.shell: /usr/bin/clickhouse stop >/dev/null 2>&1 || true
+  when: clickhouse_unit.changed
+  changed_when: true
+
+- name: Enable and start ClickHouse
+  become: true
+  ansible.builtin.systemd:
+    name: clickhouse-server.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if clickhouse_network.changed or clickhouse_unit.changed else 'started' }}"
+
+- name: Wait for ClickHouse HTTP health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ludus_clickhouse_ir_http_port }}/ping"
+    return_content: true
+  register: clickhouse_ping
+  retries: 30
+  delay: 2
+  until: clickhouse_ping.status == 200 and 'Ok' in clickhouse_ping.content
+
+- name: Copy IR schema
+  become: true
+  ansible.builtin.copy:
+    src: "{{ ludus_clickhouse_ir_schema_file }}"
+    dest: /etc/clickhouse-server/ir-schema.sql
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply IR schema idempotently
+  become: true
+  ansible.builtin.shell: clickhouse-client --multiquery < /etc/clickhouse-server/ir-schema.sql
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Verify IR tables
+  ansible.builtin.command: clickhouse-client --query "SHOW TABLES FROM ir"
+  register: clickhouse_tables
+  changed_when: false
+  failed_when: "'detections' not in clickhouse_tables.stdout"

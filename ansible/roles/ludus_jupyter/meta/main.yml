@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: ludus_jupyter
+  author: VibeRange
+  description: Prepares the participant JupyterLab runtime on clickhouse-ir
+  license: NOASSERTION
+  min_ansible_version: "2.15"
+dependencies: []

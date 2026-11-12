@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import shlex
+import sys
+from datetime import datetime, timezone
+
+output = sys.argv[1] if len(sys.argv) > 1 else "{{ ludus_vector_attacker_audit_json_path }}"
+os.makedirs(os.path.dirname(output), exist_ok=True)
+with open(output, "a", buffering=1) as stream:
+    for line in sys.stdin:
+        line = line.rstrip("\n")
+        try:
+            record = {"raw": line, "received_at": datetime.now(timezone.utc).isoformat()}
+            header = re.search(r"type=([^ ]+) msg=audit\(([^:]+):([^\)]+)\)", line)
+            if header:
+                record.update(type=header.group(1), audit_epoch=header.group(2), audit_serial=header.group(3))
+            for token in shlex.split(line):
+                if "=" in token:
+                    key, value = token.split("=", 1)
+                    record[key] = value.strip('"')
+            proctitle = record.get("proctitle", "")
+            if proctitle and re.fullmatch(r"[0-9A-Fa-f]+", proctitle):
+                try: record["proctitle"] = bytes.fromhex(proctitle).replace(b"\x00", b" ").decode(errors="replace").strip()
+                except Exception: pass
+            stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+        except Exception as exc:
+            stream.write(json.dumps({"raw": line, "parse_error": str(exc)}) + "\n")

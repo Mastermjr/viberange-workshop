@@ -1,0 +1,283 @@
+---
+- name: Install central Vector prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [curl, ca-certificates, python3]
+    state: present
+    update_cache: true
+
+- name: Read installed Vector version
+  ansible.builtin.command: /usr/bin/vector --version
+  register: vector_installed_version
+  changed_when: false
+  failed_when: false
+
+- name: Download pinned Vector package
+  become: true
+  ansible.builtin.get_url:
+    url: "https://github.com/vectordotdev/vector/releases/download/v{{ ludus_vector_defender_version }}/vector_{{ ludus_vector_defender_version }}-1_amd64.deb"
+    dest: "/tmp/vector_{{ ludus_vector_defender_version }}_amd64.deb"
+    checksum: "sha256:{{ ludus_vector_defender_package_sha256 }}"
+    mode: "0644"
+  when: ludus_vector_defender_version not in vector_installed_version.stdout
+
+- name: Install pinned Vector package
+  become: true
+  ansible.builtin.apt:
+    deb: "/tmp/vector_{{ ludus_vector_defender_version }}_amd64.deb"
+    state: present
+  when: ludus_vector_defender_version not in vector_installed_version.stdout
+
+- name: Ensure central Vector state directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/vector
+    - /var/lib/vector
+    - /usr/local/libexec
+
+- name: Install source-native ClickHouse schema
+  become: true
+  ansible.builtin.copy:
+    src: vector-native.sql
+    dest: /etc/vector/vector-native.sql
+    owner: root
+    group: root
+    mode: "0644"
+  register: vector_native_schema
+
+- name: Install source-native migration preparation
+  become: true
+  ansible.builtin.copy:
+    src: prepare-source-native-v1.sql
+    dest: /etc/vector/prepare-source-native-v1.sql
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Tetragon projection migration preparation
+  become: true
+  ansible.builtin.copy:
+    src: prepare-tetragon-projection-v2.sql
+    dest: /etc/vector/prepare-tetragon-projection-v2.sql
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install source-native backfill generator
+  become: true
+  ansible.builtin.copy:
+    src: build_source_native_backfill.py
+    dest: /usr/local/libexec/viberange-build-source-native-backfill
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Generate source-native backfill from materialized projections
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/viberange-build-source-native-backfill
+      - /etc/vector/vector-native.sql
+      - /etc/vector/backfill-source-native-v1.sql
+  changed_when: false
+
+- name: Generate Tetragon v2 projection backfill
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/viberange-build-source-native-backfill
+      - /etc/vector/vector-native.sql
+      - /etc/vector/backfill-tetragon-v2.sql
+      - --table
+      - ir.tetragon_events
+  changed_when: false
+
+- name: Ensure ClickHouse schema migration ledger exists
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --multiquery
+      - --query
+      - >-
+        CREATE DATABASE IF NOT EXISTS ir;
+        CREATE TABLE IF NOT EXISTS ir.schema_migrations
+        (migration_id LowCardinality(String), applied_at DateTime64(3, 'UTC') DEFAULT now64(3), description String)
+        ENGINE = MergeTree ORDER BY (migration_id, applied_at)
+  changed_when: false
+
+- name: Check source-native migration state
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --query
+      - "SELECT count() FROM ir.schema_migrations WHERE migration_id = 'source_native_v1'"
+  register: source_native_migration_count
+  changed_when: false
+
+- name: Read central Vector service state before migration
+  become: true
+  ansible.builtin.command: systemctl is-active vector.service
+  register: vector_service_before_migration
+  changed_when: false
+  failed_when: false
+  when: source_native_migration_count.stdout | int == 0
+
+- name: Migrate source-native physical tables from authoritative raw evidence
+  when: source_native_migration_count.stdout | int == 0
+  block:
+    - name: Stop central Vector during source-native migration
+      become: true
+      ansible.builtin.systemd:
+        name: vector.service
+        state: stopped
+      failed_when: false
+
+    - name: Apply source-native schema migration
+      become: true
+      ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/prepare-source-native-v1.sql
+      changed_when: true
+
+    - name: Create and populate source-native physical tables
+      become: true
+      ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/vector-native.sql
+      changed_when: true
+
+    - name: Backfill physical native tables from preserved raw evidence
+      become: true
+      ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/backfill-source-native-v1.sql
+      changed_when: true
+
+    - name: Record successful source-native migration
+      become: true
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --query
+          - >-
+            INSERT INTO ir.schema_migrations (migration_id, description)
+            VALUES ('source_native_v1', 'Physical native tables populated from ir.raw_events')
+      changed_when: true
+  always:
+    - name: Restore central Vector when it was active before migration
+      become: true
+      ansible.builtin.systemd:
+        name: vector.service
+        state: started
+      when: vector_service_before_migration.stdout | default('') == 'active'
+
+- name: Apply idempotent source-native schema updates
+  become: true
+  ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/vector-native.sql
+  when:
+    - source_native_migration_count.stdout | int > 0
+    - vector_native_schema.changed
+  changed_when: true
+
+- name: Check Tetragon projection migration state
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --query
+      - "SELECT count() FROM ir.schema_migrations WHERE migration_id = 'tetragon_projection_v2'"
+  register: tetragon_projection_migration_count
+  changed_when: false
+
+- name: Read central Vector service state before Tetragon migration
+  become: true
+  ansible.builtin.command: systemctl is-active vector.service
+  register: vector_service_before_tetragon_migration
+  changed_when: false
+  failed_when: false
+  when: tetragon_projection_migration_count.stdout | int == 0
+
+- name: Rebuild Tetragon projection from authoritative raw evidence
+  when: tetragon_projection_migration_count.stdout | int == 0
+  block:
+    - name: Stop central Vector during Tetragon projection migration
+      become: true
+      ansible.builtin.systemd:
+        name: vector.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove partial Tetragon projection
+      become: true
+      ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/prepare-tetragon-projection-v2.sql
+      changed_when: true
+
+    - name: Recreate Tetragon materialized projection
+      become: true
+      ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/vector-native.sql
+      changed_when: true
+
+    - name: Backfill Tetragon table from preserved raw evidence
+      become: true
+      ansible.builtin.shell: clickhouse-client --multiquery < /etc/vector/backfill-tetragon-v2.sql
+      changed_when: true
+
+    - name: Record successful Tetragon projection migration
+      become: true
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --query
+          - >-
+            INSERT INTO ir.schema_migrations (migration_id, description)
+            VALUES ('tetragon_projection_v2', 'Uniform process extraction for every Tetragon event family')
+      changed_when: true
+  always:
+    - name: Restore central Vector after Tetragon projection migration
+      become: true
+      ansible.builtin.systemd:
+        name: vector.service
+        state: started
+      when: vector_service_before_tetragon_migration.stdout | default('') == 'active'
+
+- name: Install central Vector configuration
+  become: true
+  ansible.builtin.template:
+    src: vector.toml.j2
+    dest: /etc/vector/vector.toml
+    owner: root
+    group: root
+    mode: "0644"
+  register: vector_config
+
+- name: Validate central Vector configuration
+  become: true
+  ansible.builtin.command: /usr/bin/vector validate --no-environment /etc/vector/vector.toml
+  changed_when: false
+
+- name: Install central Vector systemd unit
+  become: true
+  ansible.builtin.template:
+    src: vector.service.j2
+    dest: /etc/systemd/system/vector.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: vector_unit
+
+- name: Enable and restart central Vector
+  become: true
+  ansible.builtin.systemd:
+    name: vector.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Wait for central Vector listener
+  become: true
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 6000
+    timeout: 30

@@ -1,0 +1,6 @@
+kube-apiserver-arg:
+  - "audit-log-path={{ ludus_k3s_goat_audit_log }}"
+  - "audit-policy-file=/etc/rancher/k3s/audit-policy.yaml"
+  - "audit-log-maxage=7"
+  - "audit-log-maxbackup=5"
+  - "audit-log-maxsize=100"

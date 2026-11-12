@@ -1,0 +1,278 @@
+---
+- name: Prepare the generic VibeRange k3s victim template
+  hosts: all
+  become: true
+  vars:
+    k3s_version: "v1.37.1+k3s1"
+    k3s_binary_sha256: "92b94582eb7b34a8cf532e6006842b9ed215a6783cf56a3dd6271fd35243b2c0"
+    k3s_airgap_sha256: "865b2a63ad7a63fc0db17b7fc2985bf4ae11d5ae93ca1472be6218d20aeb6b23"
+    k3s_git_commit: "356c025475bbefaa09cf0d7e48e8e2adbbde57db"
+    k3s_install_script_sha256: "ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b"
+    helm_version: "v3.19.0"
+    helm_archive_sha256: "a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496"
+    vector_version: "0.58.0"
+    vector_package_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+    goat_version: "v2.3.0"
+    goat_commit: "aa72b6173320ebe23fe7b5395d026dae3336e399"
+    tetragon_chart_version: "1.8.0"
+    staged_images:
+      - docker.io/library/busybox:latest
+      - docker.io/aquasec/kube-bench:latest
+      - docker.io/madhuakula/hacker-container:latest
+      - docker.io/madhuakula/k8s-goat-batch-check:latest
+      - docker.io/madhuakula/k8s-goat-build-code:latest
+      - docker.io/madhuakula/k8s-goat-cache-store:latest
+      - docker.io/madhuakula/k8s-goat-health-check:latest
+      - docker.io/madhuakula/k8s-goat-hidden-in-layers:latest
+      - docker.io/madhuakula/k8s-goat-home:latest
+      - docker.io/madhuakula/k8s-goat-hunger-check:latest
+      - docker.io/madhuakula/k8s-goat-info-app:latest
+      - docker.io/madhuakula/k8s-goat-internal-api:latest
+      - docker.io/madhuakula/k8s-goat-poor-registry:latest
+      - docker.io/madhuakula/k8s-goat-system-monitor:latest
+      - quay.io/cilium/tetragon:v1.8.0
+      - quay.io/cilium/tetragon-operator:v1.8.0
+  tasks:
+    - name: Install generic victim prerequisites
+      ansible.builtin.apt:
+        name:
+          - auditd
+          - audispd-plugins
+          - ca-certificates
+          - curl
+          - git
+          - jq
+          - python3
+          - skopeo
+          - systemd-timesyncd
+          - zstd
+        state: present
+        update_cache: true
+
+    - name: Create template staging directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/vector, mode: "0755"}
+        - {path: /etc/viberange, mode: "0755"}
+        - {path: /opt/viberange/charts, mode: "0755"}
+        - {path: /opt/kubernetes-goat, mode: "0755"}
+        - {path: /var/lib/rancher/k3s/agent/images, mode: "0755"}
+        - {path: /var/lib/vector, mode: "0755"}
+        - {path: /var/run/cilium/tetragon, mode: "0755"}
+
+    - name: Download pinned k3s binary
+      ansible.builtin.get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | replace('+', '%2B') }}/k3s"
+        dest: /usr/local/bin/k3s
+        checksum: "sha256:{{ k3s_binary_sha256 }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download pinned k3s installation script
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_git_commit }}/install.sh"
+        dest: /var/tmp/k3s-install.sh
+        checksum: "sha256:{{ k3s_install_script_sha256 }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install k3s service files without starting a cluster
+      ansible.builtin.command: /var/tmp/k3s-install.sh
+      environment:
+        INSTALL_K3S_SKIP_DOWNLOAD: "true"
+        INSTALL_K3S_SKIP_START: "true"
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+      changed_when: true
+
+    - name: Keep k3s disabled until the per-range role writes identity-bearing configuration
+      ansible.builtin.systemd:
+        name: k3s.service
+        enabled: false
+        state: stopped
+
+    - name: Download pinned k3s air-gap image archive
+      ansible.builtin.get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | replace('+', '%2B') }}/k3s-airgap-images-amd64.tar.zst"
+        dest: /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+        checksum: "sha256:{{ k3s_airgap_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Download pinned Helm archive
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: "/var/tmp/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        checksum: "sha256:{{ helm_archive_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install pinned Helm binary
+      ansible.builtin.unarchive:
+        src: "/var/tmp/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: /var/tmp
+        remote_src: true
+
+    - name: Copy pinned Helm binary into place
+      ansible.builtin.copy:
+        src: /var/tmp/linux-amd64/helm
+        dest: /usr/local/bin/helm
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download pinned Tetragon chart
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/helm
+          - pull
+          - tetragon
+          - --repo
+          - https://helm.cilium.io
+          - --version
+          - "{{ tetragon_chart_version }}"
+          - --destination
+          - /opt/viberange/charts
+      args:
+        creates: "/opt/viberange/charts/tetragon-{{ tetragon_chart_version }}.tgz"
+
+    - name: Download pinned Vector package
+      ansible.builtin.get_url:
+        url: "https://github.com/vectordotdev/vector/releases/download/v{{ vector_version }}/vector_{{ vector_version }}-1_amd64.deb"
+        dest: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        checksum: "sha256:{{ vector_package_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install pinned Vector package
+      ansible.builtin.apt:
+        deb: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        state: present
+
+    - name: Disable unconfigured Vector in the generic image
+      ansible.builtin.systemd:
+        name: vector.service
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Remove package-default Vector configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/vector/vector.yaml
+        - /etc/vector/vector.yml
+
+    - name: Clone pinned Kubernetes Goat source
+      ansible.builtin.git:
+        repo: https://github.com/madhuakula/kubernetes-goat.git
+        dest: /opt/kubernetes-goat
+        version: "{{ goat_version }}"
+        depth: 1
+        force: true
+        update: true
+
+    - name: Resolve mutable workload tags and stage immutable image archives
+      ansible.builtin.shell: |
+        set -euo pipefail
+        image={{ item | quote }}
+        archive="/var/lib/rancher/k3s/agent/images/$(printf '%s' "$image" | tr '/:@' '____').tar"
+        resolved=$(skopeo inspect --override-arch amd64 --format '{{ '{{' }}.Name{{ '}}' }}@{{ '{{' }}.Digest{{ '}}' }}' "docker://$image")
+        skopeo copy --override-arch amd64 "docker://$resolved" "docker-archive:$archive:$image"
+        printf '%s %s\n' "$image" "$resolved" >> /etc/viberange/staged-images.txt
+      args:
+        executable: /bin/bash
+        creates: "/var/lib/rancher/k3s/agent/images/{{ item | replace('/', '_') | replace(':', '_') | replace('@', '_') }}.tar"
+      loop: "{{ staged_images }}"
+
+    - name: Record immutable victim template contents
+      ansible.builtin.copy:
+        dest: /etc/viberange-victim-template.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {
+            "schema_version": 1,
+            "template_name": "viberange-k3s-vuln-debian12-v1-template",
+            "k3s_version": "{{ k3s_version }}",
+            "helm_version": "{{ helm_version }}",
+            "vector_version": "{{ vector_version }}",
+            "kubernetes_goat_version": "{{ goat_version }}",
+            "kubernetes_goat_commit": "{{ goat_commit }}",
+            "tetragon_chart_version": "{{ tetragon_chart_version }}",
+            "cluster_initialized": false,
+            "images_prestaged": true
+          }
+
+    - name: Install first-boot SSH host-key regeneration unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/regenerate_ssh_host_keys.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Regenerate SSH host keys
+          Before=ssh.service
+
+          [Service]
+          Type=oneshot
+          ExecStartPre=-/bin/sh -c "/bin/rm -f -v /etc/ssh/ssh_host_*_key*"
+          ExecStart=/usr/bin/ssh-keygen -A -v
+          ExecStartPost=/bin/systemctl disable regenerate_ssh_host_keys
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable first-boot SSH host-key regeneration
+      ansible.builtin.systemd:
+        name: regenerate_ssh_host_keys.service
+        enabled: true
+        daemon_reload: true
+
+    - name: Verify baked component versions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        k3s --version | grep -F {{ k3s_version | quote }}
+        helm version --short | grep -F {{ helm_version | quote }}
+        vector --version | grep -F {{ vector_version | quote }}
+        test "$(git -C /opt/kubernetes-goat rev-parse HEAD)" = {{ goat_commit | quote }}
+        test -s /etc/viberange/staged-images.txt
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Remove build-only downloads and caches
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/tmp/k3s-install.sh
+        - "/var/tmp/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        - /var/tmp/linux-amd64
+        - "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+
+    - name: Clear APT package cache while retaining package indexes for Ludus base provisioning
+      ansible.builtin.command: apt-get clean
+      changed_when: true
+
+    - name: Remove build machine identity for unique clone identity
+      ansible.builtin.shell: |
+        set -euo pipefail
+        truncate -s 0 /etc/machine-id
+        rm -f /var/lib/dbus/machine-id
+      args:
+        executable: /bin/bash
+      changed_when: true

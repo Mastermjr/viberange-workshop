@@ -1,0 +1,22 @@
+---
+id: c0a1de4a-701d-4c9a-b541-936ff3871300
+name: VibeRange Kubernetes Goat facts
+facts:
+  - trait: viberange.target.ip
+    value: "{{ ludus_caldera_content_target_ip }}"
+  - trait: viberange.target.ports
+    value: "{{ ludus_caldera_content_scenario_ports }}"
+  - trait: viberange.target.sensitive_keys_port
+    value: "{{ ludus_caldera_content_sensitive_keys_port }}"
+  - trait: viberange.target.health_check_port
+    value: "{{ ludus_caldera_content_health_check_port }}"
+  - trait: viberange.target.system_monitor_port
+    value: "{{ ludus_caldera_content_system_monitor_port }}"
+  - trait: viberange.target.kubernetes_api
+    value: "{{ ludus_caldera_content_kubernetes_api }}"
+  - trait: viberange.target.host_mount
+    value: "{{ ludus_caldera_content_host_mount }}"
+  - trait: viberange.run.id
+    value: "{{ ludus_caldera_content_default_run_id }}"
+rules: []
+relationships: []

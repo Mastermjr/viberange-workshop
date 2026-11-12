@@ -1,0 +1,32 @@
+# Validated against the prepared k8s-goat-attack scenario.
+# Kubernetes service-account Secret enumeration, ATT&CK T1613 / T1552.007.
+
+name: "Default service account Secret enumeration"
+severity: medium
+schedule: "*/1 * * * *"
+datasource: clickhouse-ir
+query: |
+  SELECT
+    membership.run_id AS experiment_run,
+    'kubernetes_audit' AS source,
+    event.range_id,
+    event.source_host,
+    event.username,
+    count() AS probe_count,
+    groupUniqArray(toString(event.event_id)) AS matched_event_ids,
+    groupUniqArray(event.response_code) AS response_codes
+  FROM ir.kubernetes_audit AS event
+  INNER JOIN ir.raw_events_by_run AS membership ON event.event_id = membership.event_id
+  WHERE membership.source_type = 'kubernetes_audit'
+    AND event.event_time > now() - INTERVAL 5 MINUTE
+    AND event.username = 'system:serviceaccount:default:default'
+    AND event.verb = 'list'
+    AND event.resource = 'secrets'
+    AND event.namespace = 'default'
+    AND event.response_code IN (0, 200, 403)
+  GROUP BY experiment_run, event.range_id, event.source_host, event.username
+  HAVING probe_count >= 2
+threshold: 1
+webhook: harness-collector
+validation:
+  run_id: detection-validation-20261103T061611Z

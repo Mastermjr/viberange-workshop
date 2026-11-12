@@ -1,0 +1,225 @@
+---
+- name: Install Jupyter operating-system prerequisites
+  become: true
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - openssl
+    state: present
+    update_cache: true
+
+- name: Create Jupyter service group
+  become: true
+  ansible.builtin.group:
+    name: "{{ ludus_jupyter_group }}"
+    system: true
+
+- name: Create Jupyter service account
+  become: true
+  ansible.builtin.user:
+    name: "{{ ludus_jupyter_user }}"
+    group: "{{ ludus_jupyter_group }}"
+    system: true
+    home: "{{ ludus_jupyter_state_dir }}"
+    # JupyterLab terminals and notebook kernels use the same locked,
+    # non-sudo service identity. A real shell enables the terminal UI without
+    # granting SSH credentials or additional operating-system privilege.
+    shell: "{{ ludus_jupyter_shell }}"
+    create_home: false
+
+- name: Allow participant Jupyter terminal full sudo inside the analysis VM
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/viberange-jupyter
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      {{ ludus_jupyter_user }} ALL=(ALL:ALL) NOPASSWD: ALL
+
+- name: Validate participant Jupyter sudo policy
+  become: true
+  ansible.builtin.command: visudo -cf /etc/sudoers.d/viberange-jupyter
+  changed_when: false
+
+- name: Create Jupyter directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ludus_jupyter_venv | dirname }}", owner: root, group: root, mode: "0755"}
+    - {path: "{{ ludus_jupyter_config_dir }}", owner: root, group: "{{ ludus_jupyter_group }}", mode: "0750"}
+    - {path: "{{ ludus_jupyter_state_dir }}", owner: "{{ ludus_jupyter_user }}", group: "{{ ludus_jupyter_group }}", mode: "0750"}
+    - {path: "{{ ludus_jupyter_notebook_dir }}", owner: "{{ ludus_jupyter_user }}", group: "{{ ludus_jupyter_group }}", mode: "0750"}
+    - {path: "{{ ludus_jupyter_output_dir }}", owner: "{{ ludus_jupyter_user }}", group: "{{ ludus_jupyter_group }}", mode: "0750"}
+
+- name: Install pinned Jupyter requirements contract
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/share/viberange-jupyter
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy pinned Jupyter requirements
+  become: true
+  ansible.builtin.copy:
+    src: "{{ ludus_jupyter_requirements_file }}"
+    dest: /usr/local/share/viberange-jupyter/requirements.txt
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Read analysis template marker
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ludus_jupyter_template_marker }}"
+  register: ludus_jupyter_marker_raw
+  failed_when: false
+
+- name: Parse analysis template marker
+  ansible.builtin.set_fact:
+    ludus_jupyter_marker: >-
+      {{ (ludus_jupyter_marker_raw.content | b64decode | from_json)
+         if (ludus_jupyter_marker_raw.content is defined) else {} }}
+
+- name: Check baked Jupyter virtual environment
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ludus_jupyter_venv }}/bin/jupyter-lab"
+  register: ludus_jupyter_baked_venv
+
+- name: Install pinned Jupyter environment from baked wheelhouse
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -m venv {{ ludus_jupyter_venv | quote }}
+    {{ (ludus_jupyter_venv + '/bin/pip') | quote }} install \
+      --no-index --find-links {{ ludus_jupyter_template_wheelhouse | quote }} \
+      --requirement /usr/local/share/viberange-jupyter/requirements.txt
+  args:
+    executable: /bin/bash
+    creates: "{{ ludus_jupyter_venv }}/bin/jupyter-lab"
+  when:
+    - not ludus_jupyter_baked_venv.stat.exists
+    - ludus_jupyter_marker.jupyter_wheelhouse_ready | default(false) | bool
+
+- name: Install pinned Jupyter environment from package index fallback
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -m venv {{ ludus_jupyter_venv | quote }}
+    {{ (ludus_jupyter_venv + '/bin/pip') | quote }} install \
+      --requirement /usr/local/share/viberange-jupyter/requirements.txt
+  args:
+    executable: /bin/bash
+    creates: "{{ ludus_jupyter_venv }}/bin/jupyter-lab"
+  when:
+    - not ludus_jupyter_baked_venv.stat.exists
+    - not (ludus_jupyter_marker.jupyter_wheelhouse_ready | default(false) | bool)
+
+- name: Verify pinned Jupyter environment
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_jupyter_venv }}/bin/pip"
+      - check
+  changed_when: false
+
+- name: Verify Jupyter and ClickHouse Python imports
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_jupyter_venv }}/bin/python"
+      - -c
+      - "import clickhouse_connect, jupyterlab, nbformat, papermill, pandas"
+  changed_when: false
+
+- name: Ensure Jupyter authentication files are absent
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ ludus_jupyter_config_dir }}/token"
+    - "{{ ludus_jupyter_config_dir }}/jupyter.env"
+  register: ludus_jupyter_auth_cleanup
+
+- name: Install Jupyter systemd service
+  become: true
+  ansible.builtin.template:
+    src: viberange-jupyter.service.j2
+    dest: /etc/systemd/system/viberange-jupyter.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: ludus_jupyter_unit
+
+- name: Install Jupyter runtime-check notebook
+  become: true
+  ansible.builtin.copy:
+    src: runtime-check.ipynb
+    dest: "{{ ludus_jupyter_notebook_dir }}/00-runtime-check.ipynb"
+    owner: "{{ ludus_jupyter_user }}"
+    group: "{{ ludus_jupyter_group }}"
+    mode: "0640"
+    force: false
+
+- name: Install deterministic evidence-reconstruction notebook
+  become: true
+  ansible.builtin.copy:
+    src: viberange-reconstruction.ipynb
+    dest: "{{ ludus_jupyter_notebook_dir }}/01-viberange-reconstruction.ipynb"
+    owner: "{{ ludus_jupyter_user }}"
+    group: "{{ ludus_jupyter_group }}"
+    mode: "0640"
+
+- name: Write root-only participant Jupyter handoff
+  become: true
+  ansible.builtin.template:
+    src: participant-login.txt.j2
+    dest: "{{ ludus_jupyter_handoff_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Enable and start Jupyter
+  become: true
+  ansible.builtin.systemd:
+    name: viberange-jupyter.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if ludus_jupyter_auth_cleanup.changed or ludus_jupyter_unit.changed else 'started' }}"
+
+- name: Wait for unauthenticated Jupyter health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ludus_jupyter_port }}/api/status"
+    return_content: true
+  register: ludus_jupyter_health
+  retries: 30
+  delay: 2
+  until: ludus_jupyter_health.status == 200
+
+- name: Validate Jupyter ClickHouse access as service account
+  become: true
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - "{{ ludus_jupyter_user }}"
+      - --
+      - "{{ ludus_jupyter_venv }}/bin/python"
+      - -c
+      - >-
+        import clickhouse_connect;
+        c=clickhouse_connect.get_client(host='127.0.0.1', port=8123);
+        assert c.command('SELECT 1') == 1
+  changed_when: false

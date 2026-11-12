@@ -1,0 +1,521 @@
+---
+- name: Inspect prebuilt victim template manifest
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ludus_k3s_goat_template_manifest }}"
+  register: victim_template_manifest
+
+- name: Install victim prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [curl, git, auditd, audispd-plugins, jq, ca-certificates]
+    state: present
+    update_cache: "{{ not victim_template_manifest.stat.exists }}"
+
+- name: Ensure audit and k3s directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/audit/rules.d
+    - /etc/rancher/k3s
+    - /etc/viberange
+    - /root/.ssh
+    - "{{ ludus_k3s_goat_tetragon_export_directory }}"
+
+- name: Install experiment auditd rules
+  become: true
+  ansible.builtin.template:
+    src: harness.rules.j2
+    dest: /etc/audit/rules.d/harness.rules
+    owner: root
+    group: root
+    mode: "0640"
+  register: audit_rules
+
+- name: Load auditd rules
+  become: true
+  ansible.builtin.command: augenrules --load
+  when: audit_rules.changed
+  changed_when: true
+
+- name: Enable auditd
+  become: true
+  ansible.builtin.systemd:
+    name: auditd
+    enabled: true
+    state: started
+
+- name: Install Kubernetes audit policy
+  become: true
+  ansible.builtin.template:
+    src: audit-policy.yaml.j2
+    dest: /etc/rancher/k3s/audit-policy.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  register: k3s_audit_policy
+
+- name: Install k3s configuration
+  become: true
+  ansible.builtin.template:
+    src: k3s-config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  register: k3s_config
+
+- name: Read prebuilt victim template manifest
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ludus_k3s_goat_template_manifest }}"
+  register: victim_template_manifest_raw
+  when: victim_template_manifest.stat.exists
+
+- name: Validate prebuilt victim template contract
+  ansible.builtin.assert:
+    that:
+      - (victim_template_manifest_raw.content | b64decode | from_json).k3s_version == ludus_k3s_goat_k3s_version
+      - (victim_template_manifest_raw.content | b64decode | from_json).kubernetes_goat_commit == ludus_k3s_goat_repo_commit
+      - (victim_template_manifest_raw.content | b64decode | from_json).tetragon_chart_version == ludus_k3s_goat_tetragon_chart_version
+      - not (victim_template_manifest_raw.content | b64decode | from_json).cluster_initialized
+    fail_msg: "The prebuilt victim template does not match the pinned Source contract."
+  when: victim_template_manifest.stat.exists
+
+- name: Inspect installed k3s version
+  become: true
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: installed_k3s_version
+  failed_when: false
+  changed_when: false
+
+- name: Install pinned k3s when absent or mismatched
+  become: true
+  ansible.builtin.shell: curl -sfL https://get.k3s.io | sh -
+  environment:
+    INSTALL_K3S_VERSION: "{{ ludus_k3s_goat_k3s_version }}"
+  when:
+    - ludus_k3s_goat_install_k3s
+    - installed_k3s_version.rc != 0 or ludus_k3s_goat_k3s_version not in installed_k3s_version.stdout
+
+- name: Verify pinned k3s version
+  become: true
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_version_result
+  changed_when: false
+  failed_when: ludus_k3s_goat_k3s_version not in k3s_version_result.stdout
+
+- name: Enable and restart k3s with audit logging
+  become: true
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: restarted
+    daemon_reload: true
+
+- name: Wait for k3s node readiness
+  become: true
+  ansible.builtin.command: k3s kubectl get nodes --no-headers
+  register: k3s_nodes
+  retries: 30
+  delay: 10
+  until: "' Ready ' in k3s_nodes.stdout"
+  changed_when: false
+
+- name: Inspect installed Helm version
+  become: true
+  ansible.builtin.command: /usr/local/bin/helm version --short
+  register: installed_helm_version
+  failed_when: false
+  changed_when: false
+
+- name: Download pinned Helm archive when absent or mismatched
+  become: true
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-{{ ludus_k3s_goat_helm_version }}-linux-amd64.tar.gz"
+    dest: "/var/tmp/helm-{{ ludus_k3s_goat_helm_version }}-linux-amd64.tar.gz"
+    checksum: "sha256:{{ ludus_k3s_goat_helm_archive_sha256 }}"
+    mode: "0644"
+  when: installed_helm_version.rc != 0 or ludus_k3s_goat_helm_version not in installed_helm_version.stdout
+
+- name: Extract pinned Helm archive when absent or mismatched
+  become: true
+  ansible.builtin.unarchive:
+    src: "/var/tmp/helm-{{ ludus_k3s_goat_helm_version }}-linux-amd64.tar.gz"
+    dest: /var/tmp
+    remote_src: true
+  when: installed_helm_version.rc != 0 or ludus_k3s_goat_helm_version not in installed_helm_version.stdout
+
+- name: Install pinned Helm binary when absent or mismatched
+  become: true
+  ansible.builtin.copy:
+    src: /var/tmp/linux-amd64/helm
+    dest: /usr/local/bin/helm
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: installed_helm_version.rc != 0 or ludus_k3s_goat_helm_version not in installed_helm_version.stdout
+
+- name: Verify pinned Helm version
+  become: true
+  ansible.builtin.command: /usr/local/bin/helm version --short
+  register: helm_version_result
+  changed_when: false
+  failed_when: ludus_k3s_goat_helm_version not in helm_version_result.stdout
+
+- name: Install pinned Tetragon Helm values
+  become: true
+  ansible.builtin.template:
+    src: tetragon-values.yaml.j2
+    dest: /etc/viberange/tetragon-values.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Install Tetragon validation namespace manifest
+  become: true
+  ansible.builtin.template:
+    src: tetragon-validation-namespace.yaml.j2
+    dest: /etc/viberange/tetragon-validation-namespace.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Install bounded Tetragon tracing policies
+  become: true
+  ansible.builtin.template:
+    src: tetragon-tracing-policies.yaml.j2
+    dest: /etc/viberange/tetragon-tracing-policies.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Create Tetragon host export directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_goat_tetragon_export_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Precreate Tetragon JSON export for fresh ranges
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_k3s_goat_tetragon_export_directory }}/{{ ludus_k3s_goat_tetragon_export_filename }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0640"
+    access_time: preserve
+    modification_time: preserve
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Check for staged Tetragon chart
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ludus_k3s_goat_staged_tetragon_chart }}"
+  register: staged_tetragon_chart
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Configure pinned Cilium Helm repository for standard templates
+  become: true
+  ansible.builtin.command:
+    argv:
+      - helm
+      - repo
+      - add
+      - cilium
+      - "{{ ludus_k3s_goat_tetragon_repository }}"
+      - --force-update
+  register: tetragon_helm_repo
+  changed_when: "'has been added' in tetragon_helm_repo.stdout"
+  when:
+    - ludus_k3s_goat_tetragon_enabled
+    - not staged_tetragon_chart.stat.exists
+
+- name: Refresh Cilium Helm repository metadata for standard templates
+  become: true
+  ansible.builtin.command: helm repo update cilium
+  changed_when: false
+  when:
+    - ludus_k3s_goat_tetragon_enabled
+    - not staged_tetragon_chart.stat.exists
+
+- name: Deploy pinned standalone Tetragon from staged chart
+  become: true
+  ansible.builtin.command:
+    argv:
+      - helm
+      - upgrade
+      - --install
+      - "{{ ludus_k3s_goat_tetragon_release }}"
+      - "{{ ludus_k3s_goat_staged_tetragon_chart }}"
+      - --namespace
+      - "{{ ludus_k3s_goat_tetragon_namespace }}"
+      - --values
+      - /etc/viberange/tetragon-values.yaml
+      - --wait
+      - --timeout
+      - 5m
+  environment:
+    KUBECONFIG: "{{ ludus_k3s_goat_kubeconfig }}"
+  register: staged_tetragon_helm_install
+  changed_when: "'STATUS: deployed' in staged_tetragon_helm_install.stdout"
+  when:
+    - ludus_k3s_goat_tetragon_enabled
+    - staged_tetragon_chart.stat.exists
+
+- name: Deploy pinned standalone Tetragon from repository fallback
+  become: true
+  ansible.builtin.command:
+    argv:
+      - helm
+      - upgrade
+      - --install
+      - "{{ ludus_k3s_goat_tetragon_release }}"
+      - cilium/tetragon
+      - --version
+      - "{{ ludus_k3s_goat_tetragon_chart_version }}"
+      - --namespace
+      - "{{ ludus_k3s_goat_tetragon_namespace }}"
+      - --values
+      - /etc/viberange/tetragon-values.yaml
+      - --wait
+      - --timeout
+      - 5m
+  environment:
+    KUBECONFIG: "{{ ludus_k3s_goat_kubeconfig }}"
+  register: repository_tetragon_helm_install
+  changed_when: "'STATUS: deployed' in repository_tetragon_helm_install.stdout"
+  when:
+    - ludus_k3s_goat_tetragon_enabled
+    - not staged_tetragon_chart.stat.exists
+
+- name: Wait for Tetragon DaemonSet rollout
+  become: true
+  ansible.builtin.command: >-
+    k3s kubectl --namespace {{ ludus_k3s_goat_tetragon_namespace }}
+    rollout status daemonset/{{ ludus_k3s_goat_tetragon_release }} --timeout=300s
+  changed_when: false
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Wait for namespaced tracing policy CRD
+  become: true
+  ansible.builtin.command: >-
+    k3s kubectl wait --for=condition=Established
+    crd/tracingpoliciesnamespaced.cilium.io --timeout=120s
+  changed_when: false
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Apply Tetragon validation namespace
+  become: true
+  ansible.builtin.command: >-
+    k3s kubectl apply -f /etc/viberange/tetragon-validation-namespace.yaml
+  register: tetragon_namespace_apply
+  changed_when: "'created' in tetragon_namespace_apply.stdout or 'configured' in tetragon_namespace_apply.stdout"
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Apply bounded Tetragon tracing policies
+  become: true
+  ansible.builtin.command: >-
+    k3s kubectl apply -f /etc/viberange/tetragon-tracing-policies.yaml
+  register: tetragon_policy_apply
+  changed_when: "'created' in tetragon_policy_apply.stdout or 'configured' in tetragon_policy_apply.stdout"
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Verify Tetragon JSON export exists
+  become: true
+  ansible.builtin.command:
+    argv:
+      - test
+      - -f
+      - "{{ ludus_k3s_goat_tetragon_export_directory }}/{{ ludus_k3s_goat_tetragon_export_filename }}"
+  register: tetragon_export_file
+  retries: 30
+  delay: 2
+  until: tetragon_export_file.rc == 0
+  changed_when: false
+  when: ludus_k3s_goat_tetragon_enabled
+
+- name: Prove Tetragon export freshness with an ephemeral workload
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    namespace={{ ludus_k3s_goat_tetragon_validation_namespace | quote }}
+    pod=viberange-tetragon-freshness
+    export_file={{ (ludus_k3s_goat_tetragon_export_directory + '/' + ludus_k3s_goat_tetragon_export_filename) | quote }}
+    timeout={{ ludus_k3s_goat_tetragon_freshness_timeout_seconds | int }}
+
+    cleanup() {
+      k3s kubectl --namespace "$namespace" delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+    cleanup
+
+    k3s kubectl --namespace "$namespace" run "$pod" \
+      --image=docker.io/library/busybox:latest \
+      --image-pull-policy=IfNotPresent \
+      --restart=Never \
+      --command -- /bin/sh -c 'sleep 300'
+    k3s kubectl --namespace "$namespace" wait \
+      --for=condition=Ready "pod/$pod" --timeout="${timeout}s"
+
+    # Keep the container cgroup alive during deferred CRI enrichment.
+    before=$(stat -c %Y "$export_file")
+    k3s kubectl --namespace "$namespace" exec "$pod" -- \
+      /bin/sh -c 'echo viberange-tetragon-freshness'
+
+    deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+      after=$(stat -c %Y "$export_file")
+      if (( after > before )); then
+        exit 0
+      fi
+      sleep 2
+    done
+
+    echo "Tetragon export did not advance within ${timeout}s after a known process event" >&2
+    k3s kubectl --namespace {{ ludus_k3s_goat_tetragon_namespace | quote }} logs \
+      daemonset/{{ ludus_k3s_goat_tetragon_release | quote }} --tail=100 >&2 || true
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when:
+    - ludus_k3s_goat_tetragon_enabled
+    - ludus_k3s_goat_tetragon_freshness_gate_enabled
+
+- name: Ensure pinned Kubernetes Goat checkout
+  become: true
+  ansible.builtin.git:
+    repo: "{{ ludus_k3s_goat_repo_url }}"
+    dest: "{{ ludus_k3s_goat_install_dir }}"
+    version: "{{ ludus_k3s_goat_repo_ref }}"
+    force: true
+    update: "{{ not victim_template_manifest.stat.exists }}"
+
+- name: Verify pinned Kubernetes Goat commit
+  become: true
+  ansible.builtin.command: git -C {{ ludus_k3s_goat_install_dir | quote }} rev-parse HEAD
+  register: goat_commit_result
+  changed_when: false
+  failed_when: goat_commit_result.stdout != ludus_k3s_goat_repo_commit
+
+- name: Check Kubernetes Goat deployment marker
+  become: true
+  ansible.builtin.command: k3s kubectl get deployment kubernetes-goat-home
+  register: goat_deployment
+  failed_when: false
+  changed_when: false
+
+- name: Deploy Kubernetes Goat scenarios
+  become: true
+  ansible.builtin.command:
+    cmd: bash setup-kubernetes-goat.sh --kubeconfig {{ ludus_k3s_goat_kubeconfig }}
+    chdir: "{{ ludus_k3s_goat_install_dir }}"
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+    KUBECONFIG: "{{ ludus_k3s_goat_kubeconfig }}"
+  when: goat_deployment.rc != 0
+  async: 900
+  poll: 15
+
+- name: Patch Kubernetes Goat health-check for the pinned k3s containerd socket
+  become: true
+  ansible.builtin.command:
+    argv:
+      - k3s
+      - kubectl
+      - patch
+      - deployment
+      - health-check-deployment
+      - --type=merge
+      - --patch
+      - >-
+        {{ {'spec': {'template': {'spec': {'volumes': [
+          {'name': 'containerd-sock-volume',
+           'hostPath': {'path': ludus_k3s_goat_tetragon_cri_socket, 'type': 'Socket'}}
+        ]}}}} | to_json }}
+  register: goat_health_check_socket_patch
+  changed_when: "'patched' in goat_health_check_socket_patch.stdout"
+
+# Kubernetes defaults images tagged `latest` to imagePullPolicy=Always. The
+# victim template pre-stages those exact tags, but an offline testing-mode reboot
+# still tries to resolve them at the public registry unless the pod templates
+# explicitly prefer the local containerd content.
+- name: Make deployed workloads use pre-staged images after offline cold boots
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    changed=false
+    while IFS=$'\t' read -r namespace deployment; do
+      patch=$(k3s kubectl --namespace "$namespace" get deployment "$deployment" -o json | jq -c '
+        {spec:{template:{spec:{
+          containers: [.spec.template.spec.containers[] | {name: .name, imagePullPolicy: "IfNotPresent"}],
+          initContainers: [(.spec.template.spec.initContainers // [])[] | {name: .name, imagePullPolicy: "IfNotPresent"}]
+        }}}}')
+      output=$(k3s kubectl --namespace "$namespace" patch deployment "$deployment" --type=strategic --patch "$patch")
+      printf '%s/%s: %s\n' "$namespace" "$deployment" "$output"
+      [[ $output == *"patched"* ]] && changed=true
+    done < <(k3s kubectl get deployments --all-namespaces -o json | jq -r '.items[] | [.metadata.namespace, .metadata.name] | @tsv')
+    if $changed; then
+      echo VIBERANGE_IMAGE_PULL_POLICY_CHANGED
+    fi
+  args:
+    executable: /bin/bash
+  register: goat_image_pull_policy
+  changed_when: "'VIBERANGE_IMAGE_PULL_POLICY_CHANGED' in goat_image_pull_policy.stdout"
+
+- name: Wait for Kubernetes Goat deployments
+  become: true
+  ansible.builtin.command: >-
+    k3s kubectl wait --for=condition=Available deployment --all --all-namespaces --timeout=300s
+  changed_when: false
+
+- name: Deploy supervised Kubernetes Goat access wrapper
+  become: true
+  ansible.builtin.copy:
+    src: viberange-kubernetes-goat-access
+    dest: /usr/local/bin/viberange-kubernetes-goat-access
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy Kubernetes Goat access service
+  become: true
+  ansible.builtin.template:
+    src: kubernetes-goat-access.service.j2
+    dest: /etc/systemd/system/kubernetes-goat-access.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable Kubernetes Goat access service
+  become: true
+  ansible.builtin.systemd:
+    name: kubernetes-goat-access.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Verify Kubernetes Goat access service is active
+  become: true
+  ansible.builtin.command: systemctl is-active kubernetes-goat-access.service
+  changed_when: false
+
+- name: Wait for all Kubernetes Goat access ports
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item }}"
+    state: started
+    timeout: 180
+  loop: "{{ range(1230, 1237) | list }}"

@@ -1,0 +1,91 @@
+---
+# Ludus Community does not attach user-defined roles directly to the managed
+# router object. Run this role from a workload and delegate every task to the
+# router inventory host.
+- name: Check router Vector binary
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.stat:
+    path: /usr/bin/vector
+  register: vector_binary
+
+- name: Install router Vector download prerequisites
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.apt:
+    name: [curl, ca-certificates]
+    state: present
+    update_cache: true
+  when: not vector_binary.stat.exists
+
+- name: Download pinned router Vector package
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.get_url:
+    url: "https://github.com/vectordotdev/vector/releases/download/v{{ ludus_vector_router_version }}/vector_{{ ludus_vector_router_version }}-1_amd64.deb"
+    dest: "/tmp/vector_{{ ludus_vector_router_version }}_amd64.deb"
+    checksum: "sha256:{{ ludus_vector_router_sha256 }}"
+    mode: "0644"
+  when: not vector_binary.stat.exists
+
+- name: Install pinned router Vector package
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.apt:
+    deb: "/tmp/vector_{{ ludus_vector_router_version }}_amd64.deb"
+    state: present
+  when: not vector_binary.stat.exists
+
+- name: Verify pinned router Vector version
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.command: /usr/bin/vector --version
+  register: router_vector_version
+  changed_when: false
+  failed_when: ludus_vector_router_version not in router_vector_version.stdout
+
+- name: Ensure router Vector directories exist
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/vector
+    - /var/lib/vector
+
+- name: Install router Vector configuration
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.template:
+    src: vector.toml.j2
+    dest: /etc/vector/vector.toml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Validate router Vector configuration
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.command: /usr/bin/vector validate --no-environment /etc/vector/vector.toml
+  changed_when: false
+
+- name: Install router Vector systemd unit
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.template:
+    src: vector.service.j2
+    dest: /etc/systemd/system/vector.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and restart router Vector
+  become: true
+  delegate_to: "{{ ludus_vector_router_target }}"
+  ansible.builtin.systemd:
+    name: vector.service
+    daemon_reload: true
+    enabled: true
+    state: restarted

@@ -1,0 +1,14 @@
+[Unit]
+Description=Caldera Sandcat Agent
+After=network-online.target caldera.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ ludus_caldera_agent_linux_user }}
+ExecStart={{ ludus_caldera_agent_linux_path }} -server http://{{ _caldera_server_ip }}:{{ ludus_caldera_agent_server_port }} -group {{ ludus_caldera_agent_group }}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

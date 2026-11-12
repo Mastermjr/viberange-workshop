@@ -1,0 +1,31 @@
+# Managed by VibeRange. Standalone Tetragon; k3s keeps its Flannel CNI.
+exportDirectory: "{{ ludus_k3s_goat_tetragon_export_directory }}"
+hostNetwork: true
+
+# Vector reads the authoritative host JSON file directly. Disable the optional
+# stdout sidecar to avoid duplicating full Tetragon JSON as CRI container logs.
+export:
+  mode: ""
+
+tetragon:
+  image:
+    tag: "{{ ludus_k3s_goat_tetragon_image_tag }}"
+  exportFilename: "{{ ludus_k3s_goat_tetragon_export_filename }}"
+  exportFilePerm: "0640"
+  exportFileMaxSizeMB: {{ ludus_k3s_goat_tetragon_export_max_size_mb }}
+  exportFileMaxBackups: {{ ludus_k3s_goat_tetragon_export_backups }}
+  exportFileCompress: true
+  clusterName: "{{ range_id }}"
+  enableK8sAPI: true
+  enableProcessCred: true
+  enableProcessNs: true
+  cri:
+    enabled: true
+    socketHostPath: "{{ ludus_k3s_goat_tetragon_cri_socket }}"
+  cgidmap:
+    enabled: true
+
+tetragonOperator:
+  enabled: true
+  tracingPolicy:
+    enabled: true

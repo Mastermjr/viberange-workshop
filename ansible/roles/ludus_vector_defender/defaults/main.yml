@@ -1,0 +1,8 @@
+---
+# Stable role identifier for the central Vector aggregator.
+ludus_vector_defender_version: "0.58.0"
+ludus_vector_defender_package_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+ludus_vector_defender_listen_address: "0.0.0.0:6000"
+ludus_vector_defender_clickhouse_endpoint: "http://127.0.0.1:8123"
+ludus_vector_defender_disk_buffer_bytes: 536870912
+ludus_vector_defender_range_id: "{{ range_id }}"

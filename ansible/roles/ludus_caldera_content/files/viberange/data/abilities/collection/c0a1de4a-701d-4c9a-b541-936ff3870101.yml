@@ -1,0 +1,15 @@
+---
+- id: c0a1de4a-701d-4c9a-b541-936ff3870101
+  name: VibeRange prove exposed Kubernetes Goat Git metadata
+  description: Retrieve only the bounded Git HEAD proof from the authorized sensitive-keys scenario.
+  tactic: collection
+  technique:
+    attack_id: T1213
+    name: Data from Information Repositories
+  platforms:
+    linux:
+      sh:
+        command: |
+          curl -fsS --max-time 15 "http://#{viberange.target.ip}:#{viberange.target.sensitive_keys_port}/.git/HEAD" | head -c 160
+          printf '\n'
+        timeout: 30

@@ -1,0 +1,238 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+# VibeRange canonical range definition.
+#
+# Complete profile:    ludus range deploy
+# Progressive profile: ludus range deploy --only-roles <stage-role-set>
+#
+# The topology and role graph are authoritative. Experiment run identity is
+# supplied by the experiment controller and does not belong in this blueprint.
+
+# Disk-only testing snapshots avoid sequential RAM-resume clock skew, reduce
+# five-range storage/IO pressure, and exercise service cold-boot recovery.
+defaults:
+  snapshot_with_RAM: false
+  stale_hours: 0
+
+ludus:
+  - vm_name: "{{ range_id }}-clickhouse-ir"
+    hostname: clickhouse-ir
+    template: viberange-clickhouse-ir-debian12-v1-template
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 10
+    cpus: 3
+    linux: true
+    ansible_groups:
+      - viberange
+      - viberange_analysis
+    roles:
+      - VibeRange.ludus_viberange_foundation
+      - name: VibeRange.ludus_clickhouse_ir
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_viberange_foundation
+      - name: VibeRange.ludus_vector_defender
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_clickhouse_ir
+      - name: VibeRange.ludus_vector_router
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_vector_defender
+      - name: VibeRange.ludus_router_evidence
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_vector_router
+      - name: VibeRange.ludus_run_control
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_router_evidence
+      - name: VibeRange.ludus_ch_ui
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_vector_defender
+      - name: VibeRange.ludus_jupyter
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_ch_ui
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_run_control
+      - name: VibeRange.ludus_experiment_cli
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_run_control
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_router_evidence
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_jupyter
+          - vm_name: "{{ range_id }}-attacker"
+            role: VibeRange.ludus_caldera_content
+          - vm_name: "{{ range_id }}-attacker"
+            role: cisagov.ludus_caldera_agent
+      - name: VibeRange.ludus_detection_runner
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_vector_defender
+    testing:
+      snapshot: true
+      block_internet: true
+
+  - vm_name: "{{ range_id }}-attacker"
+    hostname: kali-caldera
+    template: viberange-kali-caldera-v1-template
+    vlan: 20
+    ip_last_octet: 20
+    ram_gb: 6
+    cpus: 2
+    linux: true
+    ansible_groups:
+      - viberange
+      - viberange_attacker
+    roles:
+      - VibeRange.ludus_viberange_foundation
+      - name: cisagov.ludus_caldera_server
+        depends_on:
+          - vm_name: "{{ range_id }}-attacker"
+            role: VibeRange.ludus_viberange_foundation
+      - name: VibeRange.ludus_caldera_content
+        depends_on:
+          - vm_name: "{{ range_id }}-attacker"
+            role: cisagov.ludus_caldera_server
+      - name: cisagov.ludus_caldera_agent
+        depends_on:
+          - vm_name: "{{ range_id }}-attacker"
+            role: cisagov.ludus_caldera_server
+      - name: VibeRange.ludus_vector_attacker
+        depends_on:
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_vector_defender
+    role_vars:
+      ludus_caldera_server_version: "5.3.0"
+      ludus_caldera_agent_server_ip: "10.{{ range_second_octet }}.20.20"
+      ludus_caldera_agent_linux_user: kali
+    testing:
+      snapshot: true
+      block_internet: true
+
+  - vm_name: "{{ range_id }}-k3s-vuln"
+    hostname: k3s-vuln
+    template: viberange-k3s-vuln-debian12-v1-template
+    vlan: 30
+    ip_last_octet: 30
+    ram_gb: 8
+    cpus: 3
+    linux: true
+    ansible_groups:
+      - viberange
+      - viberange_victim
+    roles:
+      - VibeRange.ludus_viberange_foundation
+      - name: VibeRange.ludus_k3s_goat
+        depends_on:
+          - vm_name: "{{ range_id }}-k3s-vuln"
+            role: VibeRange.ludus_viberange_foundation
+      - name: VibeRange.ludus_vector_victim
+        depends_on:
+          - vm_name: "{{ range_id }}-k3s-vuln"
+            role: VibeRange.ludus_k3s_goat
+          - vm_name: "{{ range_id }}-clickhouse-ir"
+            role: VibeRange.ludus_vector_defender
+    testing:
+      snapshot: true
+      block_internet: true
+
+router:
+  vm_name: "{{ range_id }}-router-debian12-x64"
+  hostname: "{{ range_id }}-router"
+  template: viberange-router-debian12-v1-template
+  ram_gb: 4
+  ram_min_gb: 2
+  cpus: 2
+
+network:
+  inter_vlan_default: REJECT
+  # Internet/package egress remains available, but production range configs
+  # MUST be rendered with scripts/render-secure-range-config.sh so
+  # always_blocked_networks denies the site's management, storage, OOB and
+  # tailnet-routed CIDRs. Real site CIDRs never belong in this Source.
+  external_default: ACCEPT
+  wireguard_vlan_default: REJECT
+  rules:
+    # Ludus installs user rules with iptables INSERT, so subsequent allows are
+    # placed above this scoped catch-all deny. This overrides Ludus's broad
+    # assigned-user access grant while preserving only approved services.
+    - name: Deny assigned participant access to all other range services
+      vlan_src: wireguard
+      ip_last_octet_src: 255
+      vlan_dst: all
+      protocol: all
+      ports: all
+      action: REJECT
+    - name: Allow assigned participant access to CH-UI
+      vlan_src: wireguard
+      # Fail-closed sentinel. Production rendering replaces this impossible
+      # client address with the assigned Ludus user/WireGuard octet.
+      ip_last_octet_src: 255
+      vlan_dst: 10
+      protocol: tcp
+      ports: 3488
+      action: ACCEPT
+    - name: Allow assigned participant access to JupyterLab
+      vlan_src: wireguard
+      ip_last_octet_src: 255
+      vlan_dst: 10
+      protocol: tcp
+      ports: 8889
+      action: ACCEPT
+    - name: Allow assigned participant access to Caldera
+      vlan_src: wireguard
+      ip_last_octet_src: 255
+      vlan_dst: 20
+      protocol: tcp
+      ports: 8888
+      action: ACCEPT
+    - name: Allow experiment CLI access to Caldera API
+      vlan_src: 10
+      vlan_dst: 20
+      protocol: tcp
+      ports: 8888
+      action: ACCEPT
+    - name: Allow attacker Vector delivery to central Vector
+      vlan_src: 20
+      vlan_dst: 10
+      protocol: tcp
+      ports: 6000
+      action: ACCEPT
+    - name: Allow victim Vector delivery to central Vector
+      vlan_src: 30
+      vlan_dst: 10
+      protocol: tcp
+      ports: 6000
+      action: ACCEPT
+    - name: Allow authorized attacker-to-Goat experiment traffic
+      vlan_src: 20
+      vlan_dst: 30
+      protocol: all
+      ports: all
+      action: ACCEPT
+
+# Metadata for external workshop tooling. Ludus preserves but does not interpret
+# this section.
+ludus_extensions:
+  viberange:
+    blueprint_version: "0.11.14"
+    participant_access: wireguard_only
+    requires_site_blocked_networks: true
+    requires_wireguard_client_octet: true
+    # Machine-readable host prerequisites for instructor tooling. Ludus
+    # preserves this extension metadata; the range blueprint does not mutate
+    # the global host config at /opt/ludus/config.yml.
+    required_ludus_host_settings:
+      prevent_user_ansible_add: true
+      expose_admin_port: false
+    deployment_profiles:
+      - complete
+      - progressive
+    analysis_host: clickhouse-ir
+    attacker_host: kali-caldera
+    victim_host: k3s-vuln

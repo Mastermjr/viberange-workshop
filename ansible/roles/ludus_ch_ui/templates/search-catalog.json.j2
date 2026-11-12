@@ -1,0 +1,120 @@
+{
+  "catalog_version": 6,
+  "range_id": "{{ ludus_ch_ui_range_id }}",
+  "saved_queries": [
+    {
+      "name": "00 — Evidence source freshness",
+      "description": "Required source counts, hosts, latest timestamp, and age for this range.",
+      "tags": ["viberange", "health"],
+      "query": "SELECT source_type, source_host, count() AS rows, max(event_time) AS latest_event, dateDiff('second', max(event_time), now()) AS age_seconds FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' GROUP BY source_type, source_host ORDER BY source_type, source_host"
+    },
+    {
+      "name": "01 — Evidence flow by minute",
+      "description": "Event volume over time by native forensic source.",
+      "tags": ["viberange", "flow"],
+      "query": "SELECT toStartOfMinute(event_time) AS minute, source_type, count() AS events FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND event_time >= now() - INTERVAL 2 HOUR GROUP BY minute, source_type ORDER BY minute, source_type"
+    },
+    {
+      "name": "02 — Latest raw evidence",
+      "description": "Newest authoritative source-native records with raw payload preserved.",
+      "tags": ["viberange", "raw"],
+      "query": "SELECT event_time, source_type, source_host, event_id, left(raw_data, 500) AS raw_preview FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 200"
+    },
+    {
+      "name": "03 — Experiment runs",
+      "description": "Explicit scenario, release, operator, state, and time boundaries for this range.",
+      "tags": ["viberange", "run", "reconstruction"],
+      "query": "SELECT run_id, scenario_id, scenario_version, blueprint_version, source_ref, status, started_at, ended_at, duration_ms, caldera_operation_id FROM ir.experiment_runs WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY created_at DESC LIMIT 100"
+    },
+    {
+      "name": "04 — Run evidence coverage",
+      "description": "Evidence counts and observed span by source and host for each experiment run.",
+      "tags": ["viberange", "run", "coverage", "reconstruction"],
+      "query": "SELECT run_id, scenario_id, source_type, source_host, events, first_event, last_event, observed_span_ms FROM ir.run_evidence_counts ORDER BY run_id DESC, source_type, source_host LIMIT 500"
+    },
+    {
+      "name": "05 — Victim Vector forwarding freshness",
+      "description": "Recent victim-source rows and ingestion age proving edge Vector delivery to central Vector and ClickHouse.",
+      "tags": ["viberange", "vector", "kubernetes", "health"],
+      "query": "SELECT source_type, source_host, countIf(ingested_time > now() - INTERVAL 5 MINUTE) AS rows_5m, max(ingested_time) AS last_ingest, dateDiff('second', last_ingest, now64(9)) AS transport_age_seconds, argMax(event_time, ingested_time) AS source_time_for_latest_ingest, dateDiff('millisecond', source_time_for_latest_ingest, last_ingest) AS source_to_ingest_ms FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND source_host = 'k3s-vuln' AND source_type IN ('kubernetes_audit', 'tetragon', 'container_log', 'vector_internal') GROUP BY source_type, source_host ORDER BY source_type"
+    },
+    {
+      "name": "10 — Kali auditd process activity",
+      "description": "Recent attacker-host process evidence promoted from native auditd records.",
+      "tags": ["viberange", "auditd", "attacker"],
+      "query": "SELECT event_time, audit_type, command_name, executable, command_line, pid, ppid, uid, source_host FROM ir.linux_auditd WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND command_name != '' ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "20 — Kubernetes API activity",
+      "description": "Recent Kubernetes API users, verbs, resources, objects, and response codes.",
+      "tags": ["viberange", "kubernetes"],
+      "query": "SELECT event_time, audit_id, username, verb, resource, namespace, object_name, response_code FROM ir.kubernetes_audit WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND audit_id != '' ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "21 — Kubernetes secret and RBAC access",
+      "description": "Scenario-relevant secret, role, binding, and service-account activity.",
+      "tags": ["viberange", "kubernetes", "detection"],
+      "query": "SELECT event_time, audit_id, username, verb, resource, namespace, object_name, response_code FROM ir.kubernetes_audit WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND resource IN ('secrets', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings', 'serviceaccounts') ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "22 — Kubernetes validation lifecycle proof",
+      "description": "API creation and cleanup records for the disposable telemetry-validation namespace.",
+      "tags": ["viberange", "kubernetes", "validation"],
+      "query": "SELECT event_time, audit_id, username, verb, resource, namespace, object_name, response_code FROM ir.kubernetes_audit WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND namespace = 'viberange-validation' ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "30 — Tetragon process lineage",
+      "description": "Runtime process execution identifiers and parent lineage.",
+      "tags": ["viberange", "tetragon", "runtime"],
+      "query": "SELECT event_time, ingested_time, event_type, node_name, namespace, pod_name, container_name, pid, parent_pid, binary, arguments, exec_id, parent_exec_id, policy_name, function_name, action FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY ingested_time DESC LIMIT 500"
+    },
+    {
+      "name": "31 — Tetragon bounded TCP proof",
+      "description": "Namespace-scoped tcp_connect events with socket tuples extracted from preserved raw policy arguments.",
+      "tags": ["viberange", "tetragon", "network", "validation"],
+      "query": "WITH JSONExtractRaw(arrayElement(JSONExtractArrayRaw(raw_data, 'process_kprobe', 'args'), 1), 'sock_arg') AS sock SELECT event_time, pod_name, container_name, binary, policy_name, function_name, JSONExtractString(sock, 'saddr') AS src_ip, JSONExtractUInt(sock, 'sport') AS src_port, JSONExtractString(sock, 'daddr') AS dst_ip, JSONExtractUInt(sock, 'dport') AS dst_port FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND policy_name = 'viberange-tcp-connect' ORDER BY ingested_time DESC LIMIT 500"
+    },
+    {
+      "name": "32 — PostgreSQL telemetry proof",
+      "description": "PostgreSQL readiness and marked validation query output preserved from CRI logs.",
+      "tags": ["viberange", "kubernetes", "container", "validation"],
+      "query": "SELECT event_time, stream, file_path, message FROM ir.container_logs WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND position(file_path, '/postgres') > 0 ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "40 — Zeek network connections",
+      "description": "Attacker/victim network metadata with Zeek UID and five-tuple.",
+      "tags": ["viberange", "zeek", "network"],
+      "query": "SELECT event_time, zeek_uid, src_ip, src_port, dst_ip, dst_port, protocol, service, duration, conn_state FROM ir.zeek_conn WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "50 — Caldera operation ground truth",
+      "description": "Controlled red-side operation identifiers and terminal states.",
+      "tags": ["viberange", "caldera", "ground-truth"],
+      "query": "SELECT event_time, operation_id, adversary_id, operation_name, state, started_at, finished_at, source_host FROM ir.caldera_operations WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 200"
+    },
+    {
+      "name": "51 — Caldera links and results",
+      "description": "Ability and link identifiers, agent, command status, timing, and bounded result preview for attacker ground truth.",
+      "tags": ["viberange", "caldera", "links", "ground-truth"],
+      "query": "SELECT event_time, operation_id, link_id, ability_id, agent_paw, status, delegated_at, finished_at, left(command, 300) AS command_preview, left(result, 500) AS result_preview FROM ir.caldera_links WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 500"
+    },
+    {
+      "name": "60 — Parse errors requiring review",
+      "description": "Malformed expected-JSON records retained in raw storage and duplicated for review.",
+      "tags": ["viberange", "quality", "errors"],
+      "query": "SELECT ingested_time, source_type, source_host, error, left(raw_data, 500) AS raw_preview FROM ir.parse_errors WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY ingested_time DESC LIMIT 500"
+    },
+    {
+      "name": "70 — Delivery outage recovery proof",
+      "description": "Marked records recovered from acknowledged disk buffers after central Vector restart.",
+      "tags": ["viberange", "reliability"],
+      "query": "SELECT event_time, source_type, source_host, event_id, left(raw_data, 500) AS raw_preview FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND position(raw_data, 'viberange-vector-smoke-{{ ludus_ch_ui_range_id }}-outage') > 0 ORDER BY event_time"
+    },
+    {
+      "name": "80 — Raw evidence integrity",
+      "description": "Checks raw preservation and event-ID uniqueness by source.",
+      "tags": ["viberange", "integrity"],
+      "query": "SELECT source_type, count() AS rows, countIf(raw_data = '') AS empty_raw, uniqExact(event_id) AS unique_event_ids, rows - unique_event_ids AS duplicate_ids FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' GROUP BY source_type ORDER BY source_type"
+    }
+  ]
+}

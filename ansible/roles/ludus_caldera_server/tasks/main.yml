@@ -1,0 +1,55 @@
+---
+# @decision DEC-CALDERA-SERVER-001
+# @title Modular task split for Caldera server deployment
+# @status accepted
+# @rationale Caldera has multiple independent prerequisites (Go, Node, Python deps)
+#   each with their own installation and idempotency logic. Splitting into sub-task
+#   files keeps each concern isolated and testable. The extract_secrets step is
+#   integrated here (absorbing the former extract_caldera_secrets role) so downstream
+#   roles can consume facts without a separate extraction step.
+
+- name: Inspect prebuilt Kali Caldera template manifest
+  become: true
+  ansible.builtin.stat:
+    path: /etc/viberange-kali-caldera-template.json
+  register: caldera_template_manifest
+
+- name: Read prebuilt Kali Caldera template manifest
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/viberange-kali-caldera-template.json
+  register: caldera_template_manifest_raw
+  when: caldera_template_manifest.stat.exists
+
+- name: Validate prebuilt Caldera system prerequisites
+  ansible.builtin.assert:
+    that:
+      - (caldera_template_manifest_raw.content | b64decode | from_json).caldera_system_prerequisites | default(false) | bool
+    fail_msg: The Kali template predates the required Caldera system-prerequisite contract and must be rebuilt.
+  when: caldera_template_manifest.stat.exists
+
+- name: Install system dependencies
+  ansible.builtin.include_tasks: dependencies.yml
+
+- name: Check if Go is already installed
+  ansible.builtin.stat:
+    path: /usr/local/go/bin/go
+  register: go_check
+
+- name: Install Go
+  ansible.builtin.include_tasks: go.yml
+  when: not go_check.stat.exists
+
+- name: Install Node via NVM
+  ansible.builtin.include_tasks: node.yml
+
+# Modified for VibeRange: always reconcile the checkout and dependencies so a
+# published role update is actually applied on the next Ludus deploy.
+- name: Install and configure Caldera
+  ansible.builtin.include_tasks: caldera.yml
+
+- name: Deploy Caldera systemd service
+  ansible.builtin.include_tasks: service.yml
+
+- name: Extract Caldera secrets for downstream roles
+  ansible.builtin.include_tasks: extract_secrets.yml

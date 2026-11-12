@@ -1,0 +1,32 @@
+---
+ludus_experiment_cli_config_dir: /etc/viberange-experiment
+ludus_experiment_cli_state_dir: /var/lib/viberange-experiment
+ludus_experiment_cli_command: /usr/local/bin/viberange-experiment
+ludus_experiment_cli_dispatcher: /usr/local/bin/viberange
+ludus_experiment_cli_run_control_command: /usr/local/sbin/viberange-run
+ludus_experiment_cli_router_target: "{{ range_id }}-router-debian12-x64"
+ludus_experiment_cli_router_host: "10.{{ range_second_octet }}.10.254"
+ludus_experiment_cli_router_user: debian
+ludus_experiment_cli_router_port: 2222
+ludus_experiment_cli_router_identity: /etc/viberange-experiment/router-control
+ludus_experiment_cli_router_known_hosts: /etc/viberange-experiment/router-known-hosts
+ludus_experiment_cli_router_wrapper: /usr/local/sbin/viberange-router-evidence-ssh
+ludus_experiment_cli_router_authorized_keys: /etc/viberange-experiment/authorized_keys
+ludus_experiment_cli_router_sshd_config: /etc/ssh/sshd_config_viberange_experiment
+ludus_experiment_cli_start_hook: /usr/local/libexec/viberange-experiment-start-hook
+ludus_experiment_cli_stop_hook: /usr/local/libexec/viberange-experiment-stop-hook
+ludus_experiment_cli_abort_hook: /usr/local/libexec/viberange-experiment-abort-hook
+ludus_experiment_cli_caldera_url: "http://10.{{ range_second_octet }}.20.20:8888"
+ludus_experiment_cli_caldera_api_key: "{{ hostvars['localhost'].caldera_api_key | default('') }}"
+ludus_experiment_cli_caldera_source_id: c0a1de4a-701d-4c9a-b541-936ff3871300
+ludus_experiment_cli_caldera_adversary_id: c0a1de4a-701d-4c9a-b541-936ff3871205
+ludus_experiment_cli_caldera_group: red
+ludus_experiment_cli_caldera_spool_dir: /var/lib/viberange/caldera-cli
+ludus_experiment_cli_caldera_expected_abilities:
+  - c0a1de4a-701d-4c9a-b541-936ff3871000
+  - c0a1de4a-701d-4c9a-b541-936ff3871002
+  - c0a1de4a-701d-4c9a-b541-936ff3871005
+  - c0a1de4a-701d-4c9a-b541-936ff3871008
+  - c0a1de4a-701d-4c9a-b541-936ff3871009
+  - c0a1de4a-701d-4c9a-b541-936ff3871010
+  - c0a1de4a-701d-4c9a-b541-936ff3871011

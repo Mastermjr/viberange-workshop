@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: ludus_viberange_foundation
+  author: VibeRange
+  description: Validate and mark the VibeRange Stage 1 Ludus foundation
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [all]
+dependencies: []

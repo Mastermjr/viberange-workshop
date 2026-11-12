@@ -1,0 +1,22 @@
+[Unit]
+Description=VibeRange run-bounded PCAP capture for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/libexec/viberange-capture-worker %i
+RuntimeMaxSec={{ ludus_router_evidence_runtime_max_seconds }}
+LimitFSIZE={{ ludus_router_evidence_max_pcap_bytes }}
+KillSignal=SIGINT
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ ludus_router_evidence_base_dir }} /run/viberange-router-evidence
+
+[Install]
+WantedBy=multi-user.target

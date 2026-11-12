@@ -1,0 +1,21 @@
+---
+ludus_router_evidence_target: "{{ range_id }}-router-debian12-x64"
+ludus_router_evidence_range_id: "{{ range_id }}"
+ludus_router_evidence_source_host: "{{ range_id }}-router"
+ludus_router_evidence_analysis_url: "http://10.{{ range_second_octet }}.10.10:8123"
+ludus_router_evidence_victim_ip: "10.{{ range_second_octet }}.30.30"
+ludus_router_evidence_capture_interface: ""
+ludus_router_evidence_capture_filter: "ip and net 10.{{ range_second_octet }}.0.0/16"
+ludus_router_evidence_base_dir: /var/lib/viberange-router-evidence
+ludus_router_evidence_spool_dir: /var/log/viberange-router
+ludus_router_evidence_zeek_spool_dir: /var/log/zeek/current
+ludus_router_evidence_template_marker: /etc/viberange-router-template.json
+ludus_router_evidence_runtime_max_seconds: 3600
+ludus_router_evidence_max_pcap_bytes: 4294967296
+ludus_router_evidence_min_free_kib: 5242880
+
+ludus_router_evidence_zeek_version: "9.0.1-0"
+ludus_router_evidence_zeek_repository: "https://download.opensuse.org/repositories/security:/zeek/Debian_12/"
+ludus_router_evidence_zeek_key_url: "https://download.opensuse.org/repositories/security:/zeek/Debian_12/Release.key"
+ludus_router_evidence_zeek_key_sha256: "b67ae73b8543af4195c930b52a07c208611253fdc519873adcf1190ffcfc1377"
+ludus_router_evidence_zeek_key_fingerprint: "F9FA0223B56B116C363737EF5DA57BDD6DD785CA"

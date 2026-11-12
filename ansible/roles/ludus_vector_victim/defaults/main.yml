@@ -1,0 +1,13 @@
+---
+ludus_vector_victim_version: "0.58.0"
+ludus_vector_victim_package_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+ludus_vector_victim_aggregator_address: "10.{{ range_second_octet }}.10.10:6000"
+ludus_vector_victim_kubernetes_audit_path: "/var/log/k3s-audit.log"
+ludus_vector_victim_tetragon_globs:
+  - "/var/run/cilium/tetragon/tetragon.log"
+  - "/var/log/tetragon/tetragon.log"
+ludus_vector_victim_container_glob: "/var/log/containers/*.log"
+ludus_vector_victim_container_excludes:
+  - "/var/log/containers/tetragon-*.log"
+ludus_vector_victim_disk_buffer_bytes: 268435488
+ludus_vector_victim_range_id: "{{ range_id }}"

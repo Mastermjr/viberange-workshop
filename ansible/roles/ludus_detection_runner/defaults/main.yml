@@ -1,0 +1,4 @@
+---
+ludus_detection_runner_interval: 30
+ludus_detection_runner_clickhouse_url: "http://127.0.0.1:8123"
+ludus_detection_runner_receiver_url: "http://127.0.0.1:9100/detections"

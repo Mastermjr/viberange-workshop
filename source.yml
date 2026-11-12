@@ -1,0 +1,7 @@
+manifest_version: 1
+name: "VibeRange Workshop"
+description: "Reproducible Ludus purple-team evidence collection and reconstruction workshop."
+authors:
+  - "Mastermjr"
+homepage: https://github.com/Mastermjr/viberange-workshop
+license: BSD-3-Clause

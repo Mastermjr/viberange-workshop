@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+original=${SSH_ORIGINAL_COMMAND:-}
+run_re='^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$'
+
+case "$original" in
+  status)
+    exec sudo -n /usr/local/sbin/viberange-router-evidence status
+    ;;
+  start\ *)
+    run_id=${original#start }
+    [[ $run_id =~ $run_re ]] || { echo 'invalid run ID' >&2; exit 2; }
+    exec sudo -n /usr/local/sbin/viberange-router-evidence start "$run_id"
+    ;;
+  stop\ *)
+    run_id=${original#stop }
+    [[ $run_id =~ $run_re ]] || { echo 'invalid run ID' >&2; exit 2; }
+    exec sudo -n /usr/local/sbin/viberange-router-evidence stop "$run_id"
+    ;;
+  *)
+    echo 'allowed commands: status, start RUN_ID, stop RUN_ID' >&2
+    exit 2
+    ;;
+esac

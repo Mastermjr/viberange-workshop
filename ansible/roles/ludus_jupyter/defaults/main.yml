@@ -1,0 +1,16 @@
+---
+ludus_jupyter_venv: /opt/viberange/jupyter-venv
+ludus_jupyter_requirements_file: requirements.txt
+ludus_jupyter_user: viberange-jupyter
+ludus_jupyter_group: viberange-jupyter
+ludus_jupyter_shell: /bin/bash
+ludus_jupyter_state_dir: /var/lib/viberange-jupyter
+ludus_jupyter_notebook_dir: /var/lib/viberange-jupyter/notebooks
+ludus_jupyter_output_dir: /var/lib/viberange-jupyter/output
+ludus_jupyter_config_dir: /etc/viberange-jupyter
+ludus_jupyter_handoff_file: /var/lib/viberange-jupyter/participant-login.txt
+ludus_jupyter_port: 8889
+ludus_jupyter_bind: 0.0.0.0
+ludus_jupyter_template_marker: /etc/viberange-clickhouse-ir-template.json
+ludus_jupyter_template_wheelhouse: /opt/viberange/jupyter-wheelhouse
+ludus_jupyter_clickhouse_url: http://127.0.0.1:8123

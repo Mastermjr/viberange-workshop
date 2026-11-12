@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: ludus_vector_router
+  author: VibeRange
+  description: Install the router Vector edge agent for Zeek JSON evidence
+  license: NOASSERTION
+  min_ansible_version: "2.15"
+dependencies: []

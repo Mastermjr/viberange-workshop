@@ -1,0 +1,20 @@
+[Unit]
+Description=VibeRange scheduled SQL detection runner
+After=viberange-detection-receiver.service
+Requires=viberange-detection-receiver.service
+
+[Service]
+Type=simple
+User=viberange-detection
+Group=viberange-detection
+Environment=CLICKHOUSE_URL={{ ludus_detection_runner_clickhouse_url }}
+Environment=RECEIVER_URL={{ ludus_detection_runner_receiver_url }}
+Environment=RULES_DIR=/opt/viberange-detection/rules
+Environment=STATE_FILE=/var/lib/viberange-detection/state.json
+Environment=INTERVAL={{ ludus_detection_runner_interval }}
+ExecStart=/usr/bin/python3 /opt/viberange-detection/runner.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

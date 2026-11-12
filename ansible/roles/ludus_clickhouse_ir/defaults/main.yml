@@ -1,0 +1,9 @@
+---
+# ClickHouse 25.8 LTS remains compatible with older x86-64 host CPUs,
+# which exposes AVX but not AVX2 to workshop VMs.
+ludus_clickhouse_ir_version: "25.8.33.6"
+ludus_clickhouse_ir_common_static_sha256: "408699f29c30bb2c2f1478e7dc9d3df745db220d1c4df29209d5691f7bdf396a"
+ludus_clickhouse_ir_listen_host: "0.0.0.0"
+ludus_clickhouse_ir_http_port: 8123
+ludus_clickhouse_ir_native_port: 9000
+ludus_clickhouse_ir_schema_file: "schema.sql"

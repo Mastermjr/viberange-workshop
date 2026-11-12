@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: ludus_run_control
+  namespace: VibeRange
+  author: Mastermjr
+  description: Define explicit experiment run boundaries and query-time evidence membership
+  license: NOASSERTION
+  min_ansible_version: "2.15"
+dependencies: []

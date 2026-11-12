@@ -1,0 +1,263 @@
+---
+- name: Validate router evidence inputs
+  ansible.builtin.assert:
+    that:
+      - ludus_router_evidence_range_id | length > 0
+      - ludus_router_evidence_target | length > 0
+      - ludus_router_evidence_zeek_key_sha256 | length == 64
+      - ludus_router_evidence_zeek_key_fingerprint | length == 40
+    fail_msg: Router evidence requires a range, router target, and pinned Zeek repository key.
+
+- name: Discover victim-facing router interface
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    ip -o route get {{ ludus_router_evidence_victim_ip | quote }} |
+    awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+  args:
+    executable: /bin/bash
+  register: router_capture_interface
+  changed_when: false
+  when: ludus_router_evidence_capture_interface | length == 0
+
+- name: Resolve router capture interface
+  ansible.builtin.set_fact:
+    ludus_router_evidence_resolved_interface: >-
+      {{ ludus_router_evidence_capture_interface
+         if ludus_router_evidence_capture_interface | length > 0
+         else router_capture_interface.stdout | trim }}
+
+- name: Validate discovered router interface
+  ansible.builtin.assert:
+    that:
+      - ludus_router_evidence_resolved_interface is match('^[A-Za-z0-9_.:-]+$')
+      - ludus_router_evidence_resolved_interface != 'lo'
+    fail_msg: Could not identify a safe victim-facing router interface.
+
+- name: Check for prebuilt VibeRange router template
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.stat:
+    path: "{{ ludus_router_evidence_template_marker }}"
+  register: router_template_marker
+
+- name: Initialize router template metadata
+  ansible.builtin.set_fact:
+    ludus_router_evidence_prebaked: false
+    ludus_router_evidence_template_metadata: {}
+
+- name: Read prebuilt router template metadata
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.slurp:
+    path: "{{ ludus_router_evidence_template_marker }}"
+  register: router_template_marker_content
+  when: router_template_marker.stat.exists
+
+- name: Parse prebuilt router template metadata
+  ansible.builtin.set_fact:
+    ludus_router_evidence_prebaked: true
+    ludus_router_evidence_template_metadata: >-
+      {{ router_template_marker_content.content | b64decode | from_json }}
+  when: router_template_marker.stat.exists
+
+- name: Validate prebuilt router package versions
+  ansible.builtin.assert:
+    that:
+      - ludus_router_evidence_template_metadata.packages_preinstalled | bool
+      - ludus_router_evidence_template_metadata.zeek_package_version == ludus_router_evidence_zeek_version
+    fail_msg: Prebuilt router template package metadata does not match this Source release.
+  when: ludus_router_evidence_prebaked | bool
+
+- name: Install router capture and repository prerequisites
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, python3, systemd-timesyncd, tcpdump, util-linux]
+    state: present
+    update_cache: true
+  when: not ludus_router_evidence_prebaked | bool
+
+- name: Enable router time synchronization
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.systemd:
+    name: systemd-timesyncd.service
+    enabled: true
+    state: started
+
+- name: Wait for synchronized router clock
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.command: timedatectl show --property=NTPSynchronized --value
+  register: router_time_sync
+  retries: 30
+  delay: 2
+  until: router_time_sync.stdout | trim == 'yes'
+  changed_when: false
+
+- name: Download pinned Zeek repository key
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.get_url:
+    url: "{{ ludus_router_evidence_zeek_key_url }}"
+    dest: /usr/share/keyrings/zeek-obs.asc
+    checksum: "sha256:{{ ludus_router_evidence_zeek_key_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: zeek_repository_key
+  when: not ludus_router_evidence_prebaked | bool
+
+- name: Verify pinned Zeek repository key fingerprint
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    gpg --show-keys --with-colons /usr/share/keyrings/zeek-obs.asc |
+    awk -F: '$1 == "fpr" {print $10; exit}' |
+    grep -Fx {{ ludus_router_evidence_zeek_key_fingerprint | quote }}
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: not ludus_router_evidence_prebaked | bool
+
+- name: Check Zeek repository keyring
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.stat:
+    path: /usr/share/keyrings/zeek-obs.gpg
+  register: zeek_repository_keyring
+  when: not ludus_router_evidence_prebaked | bool
+
+- name: Install Zeek repository keyring
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    gpg --dearmor --yes --output /usr/share/keyrings/zeek-obs.gpg
+    /usr/share/keyrings/zeek-obs.asc &&
+    chmod 0644 /usr/share/keyrings/zeek-obs.gpg
+  args:
+    executable: /bin/bash
+  when:
+    - not ludus_router_evidence_prebaked | bool
+    - zeek_repository_key.changed or not zeek_repository_keyring.stat.exists
+
+- name: Configure pinned Zeek package repository
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/usr/share/keyrings/zeek-obs.gpg]
+      {{ ludus_router_evidence_zeek_repository }} /
+    filename: zeek
+    state: present
+    update_cache: true
+  when: not ludus_router_evidence_prebaked | bool
+
+- name: Install pinned Zeek release
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.apt:
+    name: "zeek={{ ludus_router_evidence_zeek_version }}"
+    state: present
+    allow_downgrade: true
+  when: not ludus_router_evidence_prebaked | bool
+
+- name: Verify installed Zeek release
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.command: /opt/zeek/bin/zeek --version
+  register: router_zeek_version
+  changed_when: false
+  failed_when: "('version ' + ludus_router_evidence_zeek_version.split('-')[0]) not in router_zeek_version.stdout"
+
+- name: Create router evidence directories
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ludus_router_evidence_base_dir }}", mode: "0700"}
+    - {path: "{{ ludus_router_evidence_base_dir }}/runs", mode: "0700"}
+    - {path: "{{ ludus_router_evidence_spool_dir }}", mode: "0750"}
+    - {path: "{{ ludus_router_evidence_zeek_spool_dir }}", mode: "0750"}
+    - {path: /usr/local/libexec, mode: "0755"}
+
+- name: Install router evidence finalizer
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.copy:
+    src: finalize_router_evidence.py
+    dest: /usr/local/libexec/viberange-finalize-router-evidence
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install router capture worker
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.template:
+    src: capture-worker.sh.j2
+    dest: /usr/local/libexec/viberange-capture-worker
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install router evidence controller
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.template:
+    src: router-evidence.sh.j2
+    dest: /usr/local/sbin/viberange-router-evidence
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install run-bounded capture unit
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.template:
+    src: viberange-pcap@.service.j2
+    dest: /etc/systemd/system/viberange-pcap@.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: router_capture_unit
+
+- name: Reload router systemd units
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: router_capture_unit.changed
+
+- name: Validate idle router evidence controller
+  become: true
+  delegate_to: "{{ ludus_router_evidence_target }}"
+  ansible.builtin.command: /usr/local/sbin/viberange-router-evidence status
+  register: router_evidence_status
+  changed_when: false
+  failed_when: >-
+    '"state":"idle"' not in router_evidence_status.stdout and
+    '"state":"capturing"' not in router_evidence_status.stdout
+
+- name: Install PCAP artifact schema
+  become: true
+  ansible.builtin.copy:
+    src: pcap-artifacts.sql
+    dest: /etc/clickhouse-server/pcap-artifacts.sql
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply PCAP artifact schema
+  become: true
+  ansible.builtin.shell: clickhouse-client --multiquery < /etc/clickhouse-server/pcap-artifacts.sql
+  args:
+    executable: /bin/bash
+  changed_when: false

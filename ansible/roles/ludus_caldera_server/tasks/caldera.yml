@@ -1,0 +1,112 @@
+---
+# Modified for VibeRange: enforce the configured revision even when an earlier
+# interrupted/manual install left an existing checkout behind.
+- name: Clone or update Caldera repository at pinned revision
+  ansible.builtin.git:
+    repo: "{{ ludus_caldera_server_repo_url }}"
+    dest: "{{ ludus_caldera_server_install_dir }}"
+    version: "{{ ludus_caldera_server_version }}"
+    recursive: true
+    update: true
+    force: true
+  become: true
+
+- name: Configure agent sleep intervals
+  ansible.builtin.lineinfile:
+    path: "{{ ludus_caldera_server_install_dir }}/conf/agents.yml"
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - regexp: "sleep_max"
+      line: "sleep_max: {{ ludus_caldera_server_sleep_max }}"
+    - regexp: "sleep_min"
+      line: "sleep_min: {{ ludus_caldera_server_sleep_min }}"
+  become: true
+
+# Modified for VibeRange: use a managed Python runtime so pinned Caldera
+# dependencies remain reproducible on rolling distributions.
+- name: Install managed Python {{ ludus_caldera_server_python_version }}
+  become: true
+  ansible.builtin.command:
+    cmd: /usr/local/bin/uv python install {{ ludus_caldera_server_python_version }}
+  changed_when: false
+
+- name: Create Caldera virtual environment
+  become: true
+  ansible.builtin.command:
+    cmd: /usr/local/bin/uv venv --clear --python {{ ludus_caldera_server_python_version }} {{ ludus_caldera_server_install_dir }}/.venv
+  changed_when: true
+
+- name: Install Caldera Python dependencies
+  become: true
+  ansible.builtin.command:
+    cmd: /usr/local/bin/uv pip install --python {{ ludus_caldera_server_install_dir }}/.venv/bin/python -r {{ ludus_caldera_server_install_dir }}/requirements.txt
+  environment:
+    PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+  changed_when: true
+
+- name: Install selected plugin Python dependencies
+  become: true
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/uv pip install
+      --python {{ ludus_caldera_server_install_dir }}/.venv/bin/python
+      -r {{ ludus_caldera_server_install_dir }}/plugins/{{ item }}/requirements.txt
+  loop: "{{ ludus_caldera_server_plugin_requirements }}"
+  environment:
+    PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+  changed_when: true
+
+# Build Magma synchronously before systemd starts Caldera. Starting the service
+# with --build allowed the following content role to interrupt npm halfway
+# through installation, leaving a timing-dependent partial esbuild install.
+- name: Read Caldera Magma lockfile checksum
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ludus_caldera_server_install_dir }}/plugins/magma/package-lock.json"
+    checksum_algorithm: sha256
+  register: caldera_magma_lockfile
+
+- name: Define Caldera Magma build marker
+  ansible.builtin.set_fact:
+    caldera_magma_build_marker_path: >-
+      {{ ludus_caldera_server_install_dir }}/plugins/magma/.viberange-build-{{ ludus_caldera_server_version | regex_replace('[^A-Za-z0-9_.-]', '_') }}-{{ caldera_magma_lockfile.stat.checksum }}
+
+- name: Check Caldera Magma build marker
+  become: true
+  ansible.builtin.stat:
+    path: "{{ caldera_magma_build_marker_path }}"
+  register: caldera_magma_build_marker
+
+- name: Verify existing Caldera Magma frontend and esbuild runtime
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test -s dist/index.html
+    ./node_modules/esbuild/bin/esbuild --version >/dev/null
+  args:
+    chdir: "{{ ludus_caldera_server_install_dir }}/plugins/magma"
+    executable: /bin/bash
+  register: caldera_magma_runtime
+  changed_when: false
+  failed_when: false
+
+- name: Install and build pinned Caldera Magma frontend
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export NVM_DIR="{{ ansible_env.HOME }}/.nvm"
+    source "$NVM_DIR/nvm.sh"
+    nvm use {{ ludus_caldera_server_node_version | quote }} >/dev/null
+    npm ci --include=optional
+    npm run build
+    test -s dist/index.html
+    ./node_modules/esbuild/bin/esbuild --version >/dev/null
+    touch {{ caldera_magma_build_marker_path | quote }}
+  args:
+    chdir: "{{ ludus_caldera_server_install_dir }}/plugins/magma"
+    executable: /bin/bash
+  when: >-
+    not caldera_magma_build_marker.stat.exists or
+    caldera_magma_runtime.rc != 0
+  changed_when: true

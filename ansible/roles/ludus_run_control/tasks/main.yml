@@ -1,0 +1,74 @@
+---
+- name: Validate run-control inputs
+  ansible.builtin.assert:
+    that:
+      - ludus_run_control_range_id | length > 0
+      - ludus_run_control_blueprint_version | length > 0
+      - ludus_run_control_source_ref | length > 0
+    fail_msg: Run control requires range, blueprint, and Source release identity.
+
+- name: Create run-control state directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_run_control_base_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install run-control configuration
+  become: true
+  ansible.builtin.template:
+    src: run-control.json.j2
+    dest: "{{ ludus_run_control_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install run-control schema
+  become: true
+  ansible.builtin.copy:
+    src: run-control.sql
+    dest: /etc/clickhouse-server/run-control.sql
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply run-control schema
+  become: true
+  ansible.builtin.shell: clickhouse-client --multiquery < /etc/clickhouse-server/run-control.sql
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install reconstruction views
+  become: true
+  ansible.builtin.copy:
+    src: reconstruction.sql
+    dest: /etc/clickhouse-server/reconstruction.sql
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply reconstruction views
+  become: true
+  ansible.builtin.shell: clickhouse-client --multiquery < /etc/clickhouse-server/reconstruction.sql
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install run-control CLI
+  become: true
+  ansible.builtin.copy:
+    src: viberange_run.py
+    dest: /usr/local/sbin/viberange-run
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Validate run-control CLI and views
+  become: true
+  ansible.builtin.command: /usr/local/sbin/viberange-run list --limit 1
+  register: run_control_validation
+  changed_when: false
+  failed_when: run_control_validation.rc != 0

@@ -1,0 +1,385 @@
+---
+- name: Build the VibeRange Kali Caldera base template
+  hosts: all
+  become_method: sudo
+  vars:
+    vector_version: "0.58.0"
+    vector_package_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+  tasks:
+    # See: https://bugs.kali.org/view.php?id=9027
+    - name: Install from python-apt from source if needed
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          apt update 2>&1 | grep 'undefined symbol: _ZNS' >/dev/null && \
+            echo "Python-apt bug found, fixing from source..." >> /tmp/kali-install.log && \
+            DEBIAN_FRONTEND=noninteractive apt install -y python3-setuptools dpkg-dev python3-dev libapt-pkg-dev >> /tmp/kali-install.log 2>&1 && \
+            git clone https://salsa.debian.org/apt-team/python-apt >> /tmp/kali-install.log 2>&1 && cd python-apt && \
+            git checkout 2.9.2 >> /tmp/kali-install.log 2>&1 && \
+            python3 setup.py build >> /tmp/kali-install.log 2>&1 && \
+            python3 setup.py install >> /tmp/kali-install.log 2>&1 || \
+          echo "No python-apt bug found" >> /tmp/kali-install.log
+
+    - name: Try an apt install
+      become: true
+      ansible.builtin.apt:
+        name:
+          - git
+        state: present
+        update_cache: true
+      register: apt_result
+      ignore_errors: true
+
+    # This is a fix for the "python3-apt must be installed and visible from /usr/bin/python3" error in Kali 2024.4
+    - name: Fix apt for ansible if needed
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          echo "Python-apt bug 2 found, fixing from source..." >> /tmp/kali-install.log && \
+          DEBIAN_FRONTEND=noninteractive apt install -y python3-setuptools dpkg-dev python3-dev libapt-pkg-dev >> /tmp/kali-install.log 2>&1 && \
+          git clone https://salsa.debian.org/apt-team/python-apt >> /tmp/kali-install.log 2>&1 && cd python-apt && \
+          git checkout 2.9.6 >> /tmp/kali-install.log 2>&1 && \
+          python3 setup.py build >> /tmp/kali-install.log 2>&1 && \
+          python3 setup.py install >> /tmp/kali-install.log 2>&1
+      when: apt_result.failed
+
+    - name: Pin template construction to the official Kali package endpoint
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          deb https://kali.download/kali kali-rolling main contrib non-free non-free-firmware
+
+    - name: Configure bounded APT retries for the rolling Kali package endpoint
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/80-viberange-retries
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Acquire::Retries "3";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+
+    - name: Install packages
+      become: true
+      ansible.builtin.apt:
+        name:
+          - git
+          - python3-pip
+          - jq
+          - curl
+          - dbus
+          - dbus-user-session
+          - dbus-x11
+          - vim
+          - swapspace # helps with machines with low RAM
+          - kali-defaults
+          - kali-root-login
+          - desktop-base
+          - wget
+          - kali-linux-core
+          - kali-desktop-xfce
+          # - kali-linux-default # This takes forever (2+ hours) and really slows down template building
+        state: present
+        update_cache: true
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 30
+      register: result
+      retries: 3
+      delay: 30
+      until: result.failed == false
+
+    - name: Installing kasm dependencies
+      become: true
+      ansible.builtin.apt:
+        autoremove: true
+        state: present
+        name:
+          - libexporter-tiny-perl
+          - libhash-merge-simple-perl
+          - liblist-moreutils-perl
+          - liblist-moreutils-xs-perl
+          - libswitch-perl
+          - libyaml-tiny-perl
+          - ssl-cert
+
+    - name: Download kasmvnc deb
+      ansible.builtin.get_url:
+        url: https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_kali-rolling_1.4.0_amd64.deb
+        dest: /tmp/kasmvncserver_kali-rolling.deb
+        mode: '0700'
+
+    - name: Install the kasmvnc deb
+      become: true
+      ansible.builtin.apt:
+        deb: /tmp/kasmvncserver_kali-rolling.deb
+        state: present
+
+    - name: Add Kali to the ssl-cert group
+      become: true
+      ansible.builtin.user:
+        name: kali
+        groups: ssl-cert
+        append: true
+
+    - name: Create .vnc directory for VNC user
+      ansible.builtin.file:
+        path: /home/kali/.vnc
+        state: directory
+        mode: '0755'
+        owner: kali
+        group: kali
+
+    # Add a user to the vncserver, create a systemd service for it
+    - name: Set the password for the kali user
+      ansible.builtin.shell:
+        cmd: |
+          printf "password\npassword\n\n" | vncpasswd -u kali -ow /home/kali/.kasmpasswd
+
+    - name: Set correct permissions for VNC passwd file
+      ansible.builtin.file:
+        path: /home/kali/.kasmpasswd
+        owner: kali
+        group: kali
+        mode: '0600'
+
+    - name: Set the de-was-selected file
+      ansible.builtin.file:
+        path: "/home/kali/.vnc/.de-was-selected"
+        state: touch
+        owner: kali
+        group: kali
+        mode: '0644'
+
+    - name: Create xstartup script
+      ansible.builtin.copy:
+        dest: "/home/kali/.vnc/xstartup"
+        force: false
+        mode: '0755'
+        content: |-
+          #!/bin/bash
+          exec xfce4-session
+
+    - name: Deploy kasmvnc.yml config to user ~/.vnc
+      ansible.builtin.blockinfile:
+        path: "/home/kali/.vnc/kasmvnc.yaml"
+        create: true
+        block: |
+          desktop:
+            resolution:
+              width: 1920
+              height: 1080
+            allow_resize: true
+            pixel_depth: 24
+
+          keyboard:
+            remap_keys:
+            ignore_numlock: false
+            raw_keyboard: true
+
+          user_session:
+            idle_timeout: never
+
+          server:
+            auto_shutdown:
+              no_user_session_timeout: never
+              active_user_session_timeout: never
+              inactive_user_session_timeout: never
+
+          pointer:
+            enabled: true
+
+          security:
+            brute_force_protection:
+              blacklist_threshold: 0
+
+    - name: Create a service for kasmvnc
+      become: true
+      ansible.builtin.blockinfile:
+        path: /etc/systemd/system/kasmvnc@1.service
+        create: true
+        block: |
+          [Unit]
+          Description=Remote desktop service (VNC)
+          After=syslog.target network.target
+          StartLimitIntervalSec=30s
+          StartLimitBurst=5
+
+          [Service]
+          Type=simple
+          User=kali
+          PIDFile=/home/kali/.vnc/%H%i.pid
+          ExecStartPre=/bin/sh -c "/usr/bin/kasmvncserver -kill :%i > /dev/null 2>&1 || :"
+          ExecStart=/usr/bin/kasmvncserver :%i -localhost no -alwaysshared -fg -geometry 1920x1080 -SecurityTypes VncAuth -PublicIP 127.0.0.1
+          ExecStop=/usr/bin/kasmvncserver -kill :%i
+          Restart=on-failure
+          RestartSec=5s
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable the kasmvnc service
+      become: true
+      ansible.builtin.service:
+        name: kasmvnc@1.service
+        enabled: true
+        daemon_reload: true
+
+    - name: Install generic VibeRange attacker and Caldera build prerequisites
+      become: true
+      ansible.builtin.apt:
+        name:
+          - auditd
+          - build-essential
+          - ca-certificates
+          - curl
+          - git
+          - libffi-dev
+          - libxml2-dev
+          - libxslt1-dev
+          - lsof
+          - net-tools
+          - openssl
+          - pipenv
+          - python3
+          - python3-pip
+          - python3-venv
+          - socat
+          - wget
+          - zlib1g-dev
+        state: present
+        update_cache: true
+      register: attacker_prerequisites
+      retries: 3
+      delay: 30
+      until: attacker_prerequisites.failed == false
+
+    - name: Download pinned Vector package
+      become: true
+      ansible.builtin.get_url:
+        url: "https://github.com/vectordotdev/vector/releases/download/v{{ vector_version }}/vector_{{ vector_version }}-1_amd64.deb"
+        dest: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        checksum: "sha256:{{ vector_package_sha256 }}"
+        mode: "0644"
+
+    - name: Install pinned Vector package
+      become: true
+      ansible.builtin.apt:
+        deb: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        state: present
+
+    - name: Keep unconfigured Vector disabled in the generic template
+      become: true
+      ansible.builtin.systemd:
+        name: vector.service
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Remove package-default Vector configuration
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/vector/vector.yaml
+        - /etc/vector/vector.yml
+        - /etc/vector/vector.toml
+
+    - name: Create empty generic runtime directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/vector, mode: "0755"}
+        - {path: /var/lib/vector, mode: "0755"}
+        - {path: /var/lib/viberange, mode: "0755"}
+        - {path: /var/lib/viberange/caldera, mode: "0750"}
+
+    - name: Remove mutable Vector and experiment state from the image
+      become: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /var/lib/vector/*
+        rm -rf /var/lib/viberange/caldera/*
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Record immutable Kali template contents
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/viberange-kali-caldera-template.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {
+            "schema_version": 1,
+            "template_name": "viberange-kali-caldera-v1-template",
+            "vector_version": "{{ vector_version }}",
+            "caldera_system_prerequisites": true,
+            "generic_prerequisites_only": true,
+            "range_identity_baked": false,
+            "caldera_state_baked": false,
+            "experiment_state_baked": false
+          }
+
+    - name: Install first-boot SSH host-key regeneration unit
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/regenerate_ssh_host_keys.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Regenerate SSH host keys
+          Before=ssh.service
+
+          [Service]
+          Type=oneshot
+          ExecStartPre=-/bin/sh -c "/bin/rm -f -v /etc/ssh/ssh_host_*_key*"
+          ExecStart=/usr/bin/ssh-keygen -A -v
+          ExecStartPost=/bin/systemctl disable regenerate_ssh_host_keys
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable first-boot SSH host-key regeneration
+      become: true
+      ansible.builtin.systemd:
+        name: regenerate_ssh_host_keys.service
+        enabled: true
+        daemon_reload: true
+
+    - name: Verify pinned Vector version
+      become: true
+      ansible.builtin.command: /usr/bin/vector --version
+      register: vector_version_result
+      changed_when: false
+      failed_when: vector_version not in vector_version_result.stdout
+
+    - name: Remove build-only package and logs
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        - /tmp/kasmvncserver_kali-rolling.deb
+        - /tmp/kali-install.log
+
+    - name: Clear APT package cache
+      become: true
+      ansible.builtin.command: apt-get clean
+      changed_when: true

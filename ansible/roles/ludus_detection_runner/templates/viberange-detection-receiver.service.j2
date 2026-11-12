@@ -1,0 +1,18 @@
+[Unit]
+Description=VibeRange detection webhook receiver
+After=clickhouse-server.service
+Requires=clickhouse-server.service
+
+[Service]
+Type=simple
+User=viberange-detection
+Group=viberange-detection
+Environment=CLICKHOUSE_URL={{ ludus_detection_runner_clickhouse_url }}
+Environment=LISTEN=127.0.0.1
+Environment=PORT=9100
+ExecStart=/usr/bin/python3 /opt/viberange-detection/receiver.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

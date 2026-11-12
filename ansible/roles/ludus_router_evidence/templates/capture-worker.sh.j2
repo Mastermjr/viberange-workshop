@@ -1,0 +1,17 @@
+#!/bin/bash
+set -euo pipefail
+
+run_id=${1:?run ID required}
+env_file="/run/viberange-router-evidence/${run_id}.env"
+[[ -r "$env_file" ]] || { echo "missing capture environment: $env_file" >&2; exit 1; }
+# The controller creates this root-only file from validated, fixed inputs.
+# shellcheck disable=SC1090
+source "$env_file"
+
+exec /usr/bin/tcpdump \
+  -i "$CAPTURE_INTERFACE" \
+  -nn \
+  -s 0 \
+  -U \
+  -w "$CAPTURE_FILE" \
+  -- $CAPTURE_FILTER

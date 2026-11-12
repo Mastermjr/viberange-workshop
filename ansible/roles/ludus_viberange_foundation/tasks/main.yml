@@ -1,0 +1,52 @@
+---
+- name: Validate supported foundation host
+  ansible.builtin.assert:
+    that:
+      - ansible_system == "Linux"
+      - ansible_default_ipv4.address is defined
+      - range_id is defined
+    fail_msg: "VibeRange foundation requires a provisioned Linux Ludus endpoint"
+
+- name: Install system time synchronization
+  become: true
+  ansible.builtin.apt:
+    name: systemd-timesyncd
+    state: present
+    update_cache: true
+  when: ludus_viberange_foundation_ensure_time_sync | bool
+
+- name: Enable system time synchronization
+  become: true
+  ansible.builtin.systemd:
+    name: systemd-timesyncd.service
+    enabled: true
+    state: started
+  when: ludus_viberange_foundation_ensure_time_sync | bool
+
+- name: Wait for synchronized experiment clock
+  ansible.builtin.command: timedatectl show --property=NTPSynchronized --value
+  register: viberange_time_sync
+  retries: 30
+  delay: 2
+  until: viberange_time_sync.stdout | trim == 'yes'
+  changed_when: false
+  when: ludus_viberange_foundation_ensure_time_sync | bool
+
+- name: Record the deployed VibeRange foundation contract
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ ludus_viberange_foundation_marker }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      managed_by=ludus_viberange_foundation
+      range_id={{ range_id }}
+      host={{ inventory_hostname }}
+
+- name: Verify the foundation marker
+  ansible.builtin.stat:
+    path: "{{ ludus_viberange_foundation_marker }}"
+  register: viberange_foundation_marker
+  failed_when: not viberange_foundation_marker.stat.exists
+  changed_when: false

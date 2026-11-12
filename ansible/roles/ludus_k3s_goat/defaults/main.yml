@@ -1,0 +1,31 @@
+---
+ludus_k3s_goat_repo_url: "https://github.com/madhuakula/kubernetes-goat.git"
+ludus_k3s_goat_repo_ref: "v2.3.0"
+ludus_k3s_goat_repo_commit: "aa72b6173320ebe23fe7b5395d026dae3336e399"
+ludus_k3s_goat_install_dir: "/opt/kubernetes-goat"
+ludus_k3s_goat_kubeconfig: "/etc/rancher/k3s/k3s.yaml"
+ludus_k3s_goat_audit_log: "/var/log/k3s-audit.log"
+ludus_k3s_goat_install_k3s: true
+ludus_k3s_goat_k3s_version: "v1.37.1+k3s1"
+ludus_k3s_goat_helm_version: "v3.19.0"
+ludus_k3s_goat_helm_archive_sha256: "a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496"
+ludus_k3s_goat_template_manifest: "/etc/viberange-victim-template.json"
+ludus_k3s_goat_staged_tetragon_chart: "/opt/viberange/charts/tetragon-1.8.0.tgz"
+
+# Standalone Tetragon deliberately retains k3s' Flannel CNI. Router PCAP/Zeek
+# provides network evidence, so replacing the workshop CNI with Cilium/Hubble is
+# unnecessary and would make Kubernetes Goat deployment materially riskier.
+ludus_k3s_goat_tetragon_enabled: true
+ludus_k3s_goat_tetragon_chart_version: "1.8.0"
+ludus_k3s_goat_tetragon_image_tag: "v1.8.0"
+ludus_k3s_goat_tetragon_repository: "https://helm.cilium.io"
+ludus_k3s_goat_tetragon_namespace: "kube-system"
+ludus_k3s_goat_tetragon_release: "tetragon"
+ludus_k3s_goat_tetragon_export_directory: "/var/run/cilium/tetragon"
+ludus_k3s_goat_tetragon_export_filename: "tetragon.log"
+ludus_k3s_goat_tetragon_export_max_size_mb: 100
+ludus_k3s_goat_tetragon_export_backups: 5
+ludus_k3s_goat_tetragon_cri_socket: "/run/k3s/containerd/containerd.sock"
+ludus_k3s_goat_tetragon_validation_namespace: "viberange-validation"
+ludus_k3s_goat_tetragon_freshness_gate_enabled: true
+ludus_k3s_goat_tetragon_freshness_timeout_seconds: 120

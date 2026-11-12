@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "description": "Instructor-managed VibeRange range-slot pool. Participants receive fresh WireGuard profiles only; Ludus API/PAM credentials remain protected operator state. Contains no credentials or static range numbers; resolve range numbers from the authenticated Ludus API at execution time and fail closed on management-network overlap.",
+  "range_number_source": "ludus_api_at_execution_time",
+  "accounts": [
+    {
+      "user_id": "user1",
+      "range_id": "user1",
+      "admin": false
+    },
+    {
+      "user_id": "user2",
+      "range_id": "user2",
+      "admin": false
+    },
+    {
+      "user_id": "user3",
+      "range_id": "user3",
+      "admin": false
+    },
+    {
+      "user_id": "user4",
+      "range_id": "user4",
+      "admin": false
+    },
+    {
+      "user_id": "user5",
+      "range_id": "user5",
+      "admin": false
+    }
+  ]
+}

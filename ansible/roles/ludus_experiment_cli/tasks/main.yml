@@ -1,0 +1,254 @@
+---
+- name: Validate experiment CLI range inputs
+  ansible.builtin.assert:
+    that:
+      - range_id | length > 0
+      - ludus_experiment_cli_router_target | length > 0
+      - ludus_experiment_cli_router_host is match('^10\.[0-9]{1,3}\.10\.254$')
+    fail_msg: Experiment CLI requires a valid range and router target.
+
+- name: Check run-control backend
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ludus_experiment_cli_run_control_command }}"
+  register: ludus_experiment_cli_run_control
+
+- name: Require run-control backend
+  ansible.builtin.assert:
+    that:
+      - ludus_experiment_cli_run_control.stat.exists
+      - ludus_experiment_cli_run_control.stat.executable
+    fail_msg: Deploy VibeRange.ludus_run_control before the participant experiment CLI.
+
+- name: Create experiment controller directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ludus_experiment_cli_config_dir }}", mode: "0700"}
+    - {path: "{{ ludus_experiment_cli_state_dir }}", mode: "0700"}
+    - {path: "{{ ludus_experiment_cli_caldera_spool_dir }}", mode: "0755"}
+    - {path: /usr/local/libexec, mode: "0755"}
+
+- name: Generate range-local router control key
+  become: true
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -C
+      - "viberange-experiment@{{ range_id }}"
+      - -f
+      - "{{ ludus_experiment_cli_router_identity }}"
+  args:
+    creates: "{{ ludus_experiment_cli_router_identity }}"
+
+- name: Set router control private key permissions
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_experiment_cli_router_identity }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Read router control public key
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ludus_experiment_cli_router_identity }}.pub"
+  register: ludus_experiment_cli_router_public_key_raw
+
+- name: Set router control public key fact
+  ansible.builtin.set_fact:
+    ludus_experiment_cli_router_public_key: "{{ ludus_experiment_cli_router_public_key_raw.content | b64decode | trim }}"
+
+- name: Create restricted router control directory
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.file:
+    path: "{{ ludus_experiment_cli_router_authorized_keys | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install restricted evidence SSH command on router
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.copy:
+    src: viberange-router-evidence-ssh
+    dest: "{{ ludus_experiment_cli_router_wrapper }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install restricted evidence sudo policy on router
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/viberange-experiment-router
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      {{ ludus_experiment_cli_router_user }} ALL=(root) NOPASSWD: /usr/local/sbin/viberange-router-evidence status
+      {{ ludus_experiment_cli_router_user }} ALL=(root) NOPASSWD: /usr/local/sbin/viberange-router-evidence start *
+      {{ ludus_experiment_cli_router_user }} ALL=(root) NOPASSWD: /usr/local/sbin/viberange-router-evidence stop *
+  register: ludus_experiment_cli_router_sudoers
+
+- name: Validate restricted router sudo policy
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.command: visudo -cf /etc/sudoers.d/viberange-experiment-router
+  changed_when: false
+
+- name: Install dedicated router control authorized key
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.copy:
+    dest: "{{ ludus_experiment_cli_router_authorized_keys }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      restrict {{ ludus_experiment_cli_router_public_key }}
+  register: ludus_experiment_cli_router_authorization
+
+- name: Install dedicated router control sshd configuration
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.template:
+    src: router-sshd-config.j2
+    dest: "{{ ludus_experiment_cli_router_sshd_config }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: ludus_experiment_cli_router_sshd_config_state
+
+- name: Install dedicated router control sshd service
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.template:
+    src: viberange-experiment-sshd.service.j2
+    dest: /etc/systemd/system/viberange-experiment-sshd.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: ludus_experiment_cli_router_sshd_unit
+
+- name: Enable dedicated router control sshd
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.systemd:
+    name: viberange-experiment-sshd.service
+    daemon_reload: true
+    enabled: true
+    state: >-
+      {{ 'restarted'
+         if (ludus_experiment_cli_router_authorization.changed or
+             ludus_experiment_cli_router_sshd_config_state.changed or
+             ludus_experiment_cli_router_sshd_unit.changed)
+         else 'started' }}
+
+- name: Read router SSH host public key
+  become: true
+  delegate_to: "{{ ludus_experiment_cli_router_target }}"
+  ansible.builtin.slurp:
+    path: /etc/ssh/ssh_host_ed25519_key.pub
+  register: ludus_experiment_cli_router_host_key_raw
+
+- name: Set router SSH host key fact
+  ansible.builtin.set_fact:
+    ludus_experiment_cli_router_host_key_parts: >-
+      {{ (ludus_experiment_cli_router_host_key_raw.content | b64decode | trim).split() }}
+
+- name: Install pinned router SSH host key
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ ludus_experiment_cli_router_known_hosts }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      [{{ ludus_experiment_cli_router_host }}]:{{ ludus_experiment_cli_router_port }}
+      {{ ludus_experiment_cli_router_host_key_parts[0] }}
+      {{ ludus_experiment_cli_router_host_key_parts[1] }}
+      {{ '\n' }}
+
+- name: Install participant experiment CLI
+  become: true
+  ansible.builtin.copy:
+    src: viberange_experiment.py
+    dest: "{{ ludus_experiment_cli_command }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install participant VibeRange command dispatcher
+  become: true
+  ansible.builtin.copy:
+    src: viberange
+    dest: "{{ ludus_experiment_cli_dispatcher }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Read range-local Caldera API key when no delegated fact is available
+  become: true
+  delegate_to: "{{ range_id }}-attacker"
+  ansible.builtin.shell: >-
+    awk '/api_key_red/{print $2; exit}' /opt/caldera/conf/default.yml
+  register: experiment_cli_caldera_key_read
+  changed_when: false
+  when: ludus_experiment_cli_caldera_api_key | length == 0
+  no_log: true
+
+- name: Resolve range-local Caldera API key
+  ansible.builtin.set_fact:
+    experiment_cli_caldera_api_key: >-
+      {{ ludus_experiment_cli_caldera_api_key
+         | default(experiment_cli_caldera_key_read.stdout | default(''), true) }}
+  no_log: true
+
+- name: Require range-local Caldera API key
+  ansible.builtin.assert:
+    that:
+      - experiment_cli_caldera_api_key | length > 0
+    fail_msg: Deploy the Caldera server before the experiment CLI.
+  no_log: true
+
+- name: Install experiment controller configuration
+  become: true
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ ludus_experiment_cli_config_dir }}/config.json"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Validate participant experiment CLI syntax
+  become: true
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -m
+      - py_compile
+      - "{{ ludus_experiment_cli_command }}"
+  changed_when: false
+
+- name: Validate participant experiment CLI router status
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ ludus_experiment_cli_command }}"
+      - status
+  register: ludus_experiment_cli_status
+  changed_when: false

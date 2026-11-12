@@ -1,0 +1,6 @@
+# VibeRange-owned roles are vendored under ansible/roles in this Source.
+# External dependencies will be added here with version pins when the
+# corresponding workshop stage introduces them.
+roles: []
+collections: []
+subscription_roles: []

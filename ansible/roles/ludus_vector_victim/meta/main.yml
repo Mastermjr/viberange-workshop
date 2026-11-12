@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: ludus_vector_victim
+  author: VibeRange
+  description: Install the victim Vector edge agent for Kubernetes and Tetragon evidence
+  license: NOASSERTION
+  min_ansible_version: "2.15"
+dependencies: []

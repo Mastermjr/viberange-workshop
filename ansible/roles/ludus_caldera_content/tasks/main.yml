@@ -1,0 +1,130 @@
+---
+- name: Install VibeRange Caldera payload runtime
+  become: true
+  ansible.builtin.apt:
+    name: python3-websocket
+    state: present
+
+- name: Install VibeRange Caldera plugin files
+  become: true
+  ansible.builtin.copy:
+    src: viberange/
+    dest: "{{ ludus_caldera_content_install_dir }}/plugins/{{ ludus_caldera_content_plugin_name }}/"
+    owner: root
+    group: root
+    mode: preserve
+  register: viberange_caldera_plugin_files
+
+- name: Ensure VibeRange Caldera source directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_caldera_content_install_dir }}/plugins/{{ ludus_caldera_content_plugin_name }}/data/sources"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install range-specific VibeRange Caldera fact source
+  become: true
+  ansible.builtin.template:
+    src: viberange-source.yml.j2
+    dest: >-
+      {{ ludus_caldera_content_install_dir }}/plugins/{{ ludus_caldera_content_plugin_name }}/data/sources/c0a1de4a-701d-4c9a-b541-936ff3871300.yml
+    owner: root
+    group: root
+    mode: "0644"
+  register: viberange_caldera_source
+
+- name: Install VibeRange bounded GoTTY executor
+  become: true
+  ansible.builtin.copy:
+    src: viberange/payloads/viberange_gotty_exec.py
+    dest: /usr/local/bin/viberange-gotty-exec
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install VibeRange Caldera persistent content synchronizer
+  become: true
+  ansible.builtin.copy:
+    src: sync_content.py
+    dest: /usr/local/libexec/viberange-sync-caldera-content
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Enable VibeRange Caldera plugin
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ ludus_caldera_content_install_dir }}/conf/default.yml"
+    insertafter: '^plugins:$'
+    line: '- {{ ludus_caldera_content_plugin_name }}'
+    state: present
+  register: viberange_caldera_plugin_enabled
+
+- name: Restart Caldera after plugin content changes
+  become: true
+  ansible.builtin.systemd:
+    name: caldera.service
+    state: restarted
+  when: >-
+    viberange_caldera_plugin_files.changed or
+    viberange_caldera_source.changed or
+    viberange_caldera_plugin_enabled.changed
+
+- name: Wait for Caldera after plugin initialization
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8888/
+    status_code: 200
+  register: viberange_caldera_ready
+  retries: 30
+  delay: 5
+  until: viberange_caldera_ready.status == 200
+
+- name: Read local Caldera red API key for content validation
+  become: true
+  ansible.builtin.shell: >-
+    awk '/api_key_red/{print $2; exit}'
+    {{ ludus_caldera_content_install_dir }}/conf/default.yml
+  register: viberange_caldera_api_key
+  changed_when: false
+  no_log: true
+
+- name: Synchronize VibeRange content into Caldera persistent state
+  become: true
+  ansible.builtin.command: >-
+    {{ ludus_caldera_content_install_dir }}/.venv/bin/python
+    /usr/local/libexec/viberange-sync-caldera-content
+  register: viberange_caldera_content_sync
+  changed_when: false
+  no_log: true
+
+- name: Query installed VibeRange Caldera content
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8888/api/v2/{{ item }}"
+    headers:
+      KEY: "{{ viberange_caldera_api_key.stdout }}"
+    return_content: true
+    status_code: 200
+  loop:
+    - abilities
+    - adversaries
+    - sources
+  register: viberange_caldera_content_api
+  changed_when: false
+  no_log: true
+
+- name: Verify VibeRange Caldera content IDs are loaded
+  ansible.builtin.assert:
+    that:
+      - >-
+        'c0a1de4a-701d-4c9a-b541-936ff3871000' in
+        (viberange_caldera_content_api.results[0].json | map(attribute='ability_id') | list)
+      - >-
+        'c0a1de4a-701d-4c9a-b541-936ff3871205' in
+        (viberange_caldera_content_api.results[1].json | map(attribute='adversary_id') | list)
+      - >-
+        'c0a1de4a-701d-4c9a-b541-936ff3871300' in
+        (viberange_caldera_content_api.results[2].json | map(attribute='id') | list)
+    fail_msg: VibeRange Caldera plugin content did not load completely
+  no_log: true

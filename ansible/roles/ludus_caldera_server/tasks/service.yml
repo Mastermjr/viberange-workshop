@@ -1,0 +1,35 @@
+---
+- name: Resolve service PATH including Go and NVM
+  become: true
+  ansible.builtin.shell: |
+    reqs='/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin'
+    nvm=$(find {{ ansible_env.HOME }}/.nvm/versions/node/*/bin -type d 2>/dev/null | paste -sd ':' -)
+    echo "$PATH:$reqs:${nvm}"
+  register: caldera_service_path
+  changed_when: false
+
+- name: Deploy Caldera systemd service
+  become: true
+  ansible.builtin.template:
+    src: caldera.service.j2
+    dest: /etc/systemd/system/caldera.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reload systemd and enable/restart Caldera
+  become: true
+  ansible.builtin.systemd:
+    name: caldera.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Wait for Caldera HTTP readiness before downstream roles
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ludus_caldera_server_port }}/"
+    status_code: 200
+  register: caldera_server_ready
+  retries: 60
+  delay: 5
+  until: caldera_server_ready.status == 200

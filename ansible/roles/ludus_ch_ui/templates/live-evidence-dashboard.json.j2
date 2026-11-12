@@ -1,0 +1,151 @@
+{
+  "dashboard": {
+    "name": "VibeRange Live Evidence — {{ ludus_ch_ui_range_id }}",
+    "description": "Auto-refreshable evidence health and forensic activity for the assigned VibeRange."
+  },
+  "panels": [
+    {
+      "name": "Authoritative events",
+      "description": "Total preserved records for this range.",
+      "panel_type": "stat",
+      "query": "SELECT count() AS events FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "events"},
+      "layout_x": 0,
+      "layout_y": 0,
+      "layout_w": 3,
+      "layout_h": 3
+    },
+    {
+      "name": "Parse errors",
+      "description": "Records duplicated to the review queue without removal from raw storage.",
+      "panel_type": "stat",
+      "query": "SELECT count() AS errors FROM ir.parse_errors WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "errors"},
+      "layout_x": 3,
+      "layout_y": 0,
+      "layout_w": 3,
+      "layout_h": 3
+    },
+    {
+      "name": "Active evidence sources",
+      "description": "Distinct native sources currently represented.",
+      "panel_type": "stat",
+      "query": "SELECT uniqExact(source_type) AS sources FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "sources"},
+      "layout_x": 6,
+      "layout_y": 0,
+      "layout_w": 3,
+      "layout_h": 3
+    },
+    {
+      "name": "Evidence hosts",
+      "description": "Distinct source hosts currently represented.",
+      "panel_type": "stat",
+      "query": "SELECT uniqExact(source_host) AS hosts FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "hosts"},
+      "layout_x": 9,
+      "layout_y": 0,
+      "layout_w": 3,
+      "layout_h": 3
+    },
+    {
+      "name": "Evidence flow",
+      "description": "Per-minute volume by source over the dashboard time range.",
+      "panel_type": "timeseries",
+      "query": "SELECT toStartOfMinute(event_time) AS ts, countIf(source_type = 'linux_auditd') AS auditd, countIf(source_type = 'kubernetes_audit') AS kubernetes_audit, countIf(source_type = 'container_log') AS container_logs, countIf(source_type = 'vector_internal') AS vector_health, countIf(source_type = 'tetragon') AS tetragon, countIf(source_type = 'zeek') AS zeek, countIf(source_type = 'caldera_operation') AS caldera FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND $__timeFilter(event_time, datetime64) GROUP BY ts ORDER BY ts",
+      "config": {"chartType": "timeseries", "xColumn": "ts", "yColumns": ["auditd", "kubernetes_audit", "container_logs", "vector_health", "tetragon", "zeek", "caldera"], "legendPosition": "bottom", "fill": "area", "stacked": true},
+      "layout_x": 0,
+      "layout_y": 3,
+      "layout_w": 12,
+      "layout_h": 5
+    },
+    {
+      "name": "Source freshness",
+      "description": "Latest evidence and current age for every source and host.",
+      "panel_type": "table",
+      "query": "SELECT source_type, source_host, count() AS rows, max(event_time) AS latest_event, dateDiff('second', max(event_time), now()) AS age_seconds FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' GROUP BY source_type, source_host ORDER BY age_seconds DESC",
+      "config": {"chartType": "table"},
+      "layout_x": 0,
+      "layout_y": 8,
+      "layout_w": 6,
+      "layout_h": 5
+    },
+    {
+      "name": "Recent Kubernetes API activity",
+      "description": "Latest control-plane users, verbs, resources, and responses.",
+      "panel_type": "table",
+      "query": "SELECT event_time, username, verb, resource, namespace, object_name, response_code FROM ir.kubernetes_audit WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND audit_id != '' ORDER BY event_time DESC LIMIT 100",
+      "config": {"chartType": "table"},
+      "layout_x": 6,
+      "layout_y": 8,
+      "layout_w": 6,
+      "layout_h": 5
+    },
+    {
+      "name": "Recent Zeek connections",
+      "description": "Latest network five-tuples and Zeek UIDs.",
+      "panel_type": "table",
+      "query": "SELECT event_time, zeek_uid, src_ip, src_port, dst_ip, dst_port FROM ir.zeek_conn WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 100",
+      "config": {"chartType": "table"},
+      "layout_x": 0,
+      "layout_y": 13,
+      "layout_w": 6,
+      "layout_h": 5
+    },
+    {
+      "name": "Recent attacker processes",
+      "description": "Latest Kali auditd process evidence.",
+      "panel_type": "table",
+      "query": "SELECT event_time, command_name, executable, pid, ppid, uid FROM ir.linux_auditd WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND command_name != '' ORDER BY event_time DESC LIMIT 100",
+      "config": {"chartType": "table"},
+      "layout_x": 6,
+      "layout_y": 13,
+      "layout_w": 6,
+      "layout_h": 5
+    },
+    {
+      "name": "Machines and evidence coverage",
+      "description": "Every expected range machine, its observed source types, row count, latest evidence, and current staleness. A zero-row machine is immediately visible.",
+      "panel_type": "table",
+      "query": "SELECT expected.source_host AS machine, ifNull(actual.source_types, CAST([], 'Array(String)')) AS evidence_sources, ifNull(actual.rows, 0) AS events, if(actual.latest_event IS NULL, 'no data', toString(actual.latest_event)) AS latest_event, ifNull(dateDiff('second', actual.latest_event, now()), -1) AS age_seconds FROM (SELECT arrayJoin(['clickhouse-ir', 'kali-caldera', 'k3s-vuln', '{{ ludus_ch_ui_range_id }}-router']) AS source_host) AS expected LEFT JOIN (SELECT source_host, groupUniqArray(source_type) AS source_types, count() AS rows, max(event_time) AS latest_event FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' GROUP BY source_host) AS actual USING (source_host) ORDER BY machine",
+      "config": {"chartType": "table"},
+      "layout_x": 0,
+      "layout_y": 18,
+      "layout_w": 8,
+      "layout_h": 5
+    },
+    {
+      "name": "Evidence volume by machine",
+      "description": "Relative event contribution from each telemetry-producing machine.",
+      "panel_type": "bar",
+      "query": "SELECT source_host AS machine, count() AS events FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' GROUP BY source_host ORDER BY events DESC",
+      "config": {"chartType": "bar", "xColumn": "machine", "yColumns": ["events"], "legendPosition": "bottom"},
+      "layout_x": 8,
+      "layout_y": 18,
+      "layout_w": 4,
+      "layout_h": 5
+    },
+    {
+      "name": "Recent Tetragon runtime activity",
+      "description": "Pod process lineage and bounded tracing-policy observations from the k3s victim.",
+      "panel_type": "table",
+      "query": "SELECT event_time, event_type, namespace, pod_name, container_name, binary, arguments, policy_name, function_name FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY ingested_time DESC LIMIT 100",
+      "config": {"chartType": "table"},
+      "layout_x": 0,
+      "layout_y": 23,
+      "layout_w": 12,
+      "layout_h": 6
+    },
+    {
+      "name": "Recent Caldera operation links",
+      "description": "Attacker ground-truth ability and link execution status with bounded command and result previews.",
+      "panel_type": "table",
+      "query": "SELECT event_time, operation_id, link_id, ability_id, agent_paw, status, left(command, 200) AS command_preview, left(result, 300) AS result_preview FROM ir.caldera_links WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 100",
+      "config": {"chartType": "table"},
+      "layout_x": 0,
+      "layout_y": 29,
+      "layout_w": 12,
+      "layout_h": 6
+    }
+  ]
+}

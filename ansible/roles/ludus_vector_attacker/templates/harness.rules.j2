@@ -1,0 +1,4 @@
+-a always,exit -F arch=b64 -S execve -k exec
+-a always,exit -F arch=b64 -S connect -F a2=16 -k net_ipv4
+-a always,exit -F arch=b64 -S openat -F dir=/etc -F perm=wa -k etc_write
+-w /var/log -p wa -k log_tamper

@@ -1,0 +1,11 @@
+---
+ludus_caldera_content_install_dir: /opt/caldera
+ludus_caldera_content_plugin_name: viberange
+ludus_caldera_content_target_ip: "10.{{ range_second_octet }}.30.30"
+ludus_caldera_content_sensitive_keys_port: 1230
+ludus_caldera_content_health_check_port: 1231
+ludus_caldera_content_system_monitor_port: 1233
+ludus_caldera_content_kubernetes_api: "https://10.{{ range_second_octet }}.30.30:6443"
+ludus_caldera_content_host_mount: /host-system
+ludus_caldera_content_scenario_ports: "1230 1231 1232 1233 1234 1235 1236"
+ludus_caldera_content_default_run_id: VIBERANGE_RUN_ID_REQUIRED

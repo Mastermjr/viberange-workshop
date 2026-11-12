@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: ludus_detection_runner
+  author: VibeRange
+  description: Scheduled ClickHouse SQL detections and queryable detection output
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [all]
+dependencies: []

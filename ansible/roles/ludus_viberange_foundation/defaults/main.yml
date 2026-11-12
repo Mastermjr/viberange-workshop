@@ -1,0 +1,3 @@
+---
+ludus_viberange_foundation_marker: /etc/viberange-foundation
+ludus_viberange_foundation_ensure_time_sync: true

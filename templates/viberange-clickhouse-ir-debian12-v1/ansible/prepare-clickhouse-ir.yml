@@ -1,0 +1,357 @@
+---
+- name: Prepare the workshop-ready VibeRange clickhouse-ir template
+  hosts: all
+  become: true
+  vars:
+    clickhouse_version: "25.8.33.6"
+    clickhouse_sha256: "408699f29c30bb2c2f1478e7dc9d3df745db220d1c4df29209d5691f7bdf396a"
+    vector_version: "0.58.0"
+    vector_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+    ch_ui_version: "2.32.0"
+    ch_ui_sha256: "eb1fa7973e7c5a010fbb12c36dda65ee3b7442e277662499e2e95a29701ffe89"
+    bootstrap_dir: /opt/viberange/bootstrap
+  tasks:
+    - name: Install generic analysis prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - jq
+          - openssl
+          - python3
+          - python3-pip
+          - python3-venv
+          - python3-yaml
+          - util-linux
+        state: present
+        update_cache: true
+
+    - name: Create immutable bootstrap asset directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install versioned workshop bootstrap assets
+      ansible.builtin.copy:
+        src: ../files/bootstrap/
+        dest: "{{ bootstrap_dir }}/"
+        owner: root
+        group: root
+        directory_mode: "0755"
+        mode: preserve
+
+    - name: Download pinned ClickHouse package
+      ansible.builtin.get_url:
+        url: "https://github.com/ClickHouse/ClickHouse/releases/download/v{{ clickhouse_version }}-lts/clickhouse-common-static_{{ clickhouse_version }}_amd64.deb"
+        dest: "/var/tmp/clickhouse-common-static_{{ clickhouse_version }}_amd64.deb"
+        checksum: "sha256:{{ clickhouse_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install pinned ClickHouse package
+      ansible.builtin.apt:
+        deb: "/var/tmp/clickhouse-common-static_{{ clickhouse_version }}_amd64.deb"
+        state: present
+        allow_downgrade: true
+
+    - name: Install ClickHouse base layout
+      ansible.builtin.command: /usr/bin/clickhouse install --noninteractive
+      args:
+        creates: /etc/clickhouse-server/config.xml
+
+    - name: Install template-build ClickHouse systemd unit
+      ansible.builtin.copy:
+        src: ../files/bootstrap/clickhouse/clickhouse-server.service.j2
+        dest: /etc/systemd/system/clickhouse-server.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Start ClickHouse as its service account for schema initialization
+      ansible.builtin.systemd:
+        name: clickhouse-server.service
+        daemon_reload: true
+        enabled: false
+        state: started
+
+    - name: Wait for temporary ClickHouse server
+      ansible.builtin.command: /usr/bin/clickhouse-client --query "SELECT 1"
+      register: clickhouse_template_ping
+      retries: 30
+      delay: 2
+      until: clickhouse_template_ping.rc == 0
+      changed_when: false
+
+    - name: Apply bootstrap evidence schemas
+      ansible.builtin.shell: >-
+        clickhouse-client --multiquery < {{ item | quote }}
+      args:
+        executable: /bin/bash
+      loop:
+        - "{{ bootstrap_dir }}/clickhouse/schema.sql"
+        - "{{ bootstrap_dir }}/vector/vector-native.sql"
+        - "{{ bootstrap_dir }}/router/pcap-artifacts.sql"
+        - "{{ bootstrap_dir }}/run-control/run-control.sql"
+        - "{{ bootstrap_dir }}/run-control/reconstruction.sql"
+      changed_when: true
+
+    - name: Record schema migrations already represented by the empty image
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --query
+          - >-
+            INSERT INTO ir.schema_migrations (migration_id, description) VALUES
+            ('source_native_v1', 'Template contains empty physical native tables'),
+            ('tetragon_projection_v2', 'Template contains uniform Tetragon projection')
+      changed_when: true
+
+    - name: Verify initialized schema is empty and complete
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --query
+          - >-
+            SELECT throwIf(
+              (SELECT count() FROM ir.raw_events) != 0 OR
+              (SELECT count() FROM ir.parse_errors) != 0 OR
+              (SELECT count() FROM ir.experiment_run_events) != 0 OR
+              (SELECT count() FROM system.tables WHERE database = 'ir') < 25,
+              'clickhouse-ir template schema is incomplete or contains evidence')
+      changed_when: false
+
+    - name: Remove ClickHouse build query history
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --query
+          - "TRUNCATE TABLE IF EXISTS system.{{ item }}"
+      loop:
+        - query_log
+        - query_thread_log
+        - part_log
+        - trace_log
+        - metric_log
+        - asynchronous_metric_log
+        - text_log
+        - processors_profile_log
+        - error_log
+      failed_when: false
+      changed_when: false
+
+    - name: Stop and disable template ClickHouse service
+      ansible.builtin.systemd:
+        name: clickhouse-server.service
+        enabled: false
+        state: stopped
+
+    - name: Download pinned Vector package
+      ansible.builtin.get_url:
+        url: "https://github.com/vectordotdev/vector/releases/download/v{{ vector_version }}/vector_{{ vector_version }}-1_amd64.deb"
+        dest: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        checksum: "sha256:{{ vector_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install pinned Vector package
+      ansible.builtin.apt:
+        deb: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        state: present
+
+    - name: Disable unconfigured Vector in template
+      ansible.builtin.systemd:
+        name: vector.service
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Remove package-default Vector configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/vector/vector.yaml
+        - /etc/vector/vector.yml
+        - /etc/vector/vector.toml
+
+    - name: Empty Vector runtime state
+      ansible.builtin.shell: rm -rf /var/lib/vector/*
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Create pinned Jupyter wheelhouse
+      ansible.builtin.file:
+        path: /opt/viberange/jupyter-wheelhouse
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download pinned Jupyter dependency set
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -m
+          - pip
+          - download
+          - --dest
+          - /opt/viberange/jupyter-wheelhouse
+          - --requirement
+          - "{{ bootstrap_dir }}/jupyter/requirements.txt"
+      changed_when: true
+
+    - name: Create baked Jupyter virtual environment
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -m
+          - venv
+          - /opt/viberange/jupyter-venv
+      args:
+        creates: /opt/viberange/jupyter-venv/bin/python
+
+    - name: Install Jupyter from baked wheelhouse
+      ansible.builtin.command:
+        argv:
+          - /opt/viberange/jupyter-venv/bin/pip
+          - install
+          - --no-index
+          - --find-links
+          - /opt/viberange/jupyter-wheelhouse
+          - --requirement
+          - "{{ bootstrap_dir }}/jupyter/requirements.txt"
+      changed_when: true
+
+    - name: Verify baked Jupyter environment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        /opt/viberange/jupyter-venv/bin/pip check
+        /opt/viberange/jupyter-venv/bin/python -c 'import clickhouse_connect, jupyterlab, nbformat, papermill, pandas'
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Create CH-UI service account
+      ansible.builtin.user:
+        name: ch-ui
+        system: true
+        shell: /usr/sbin/nologin
+        home: /var/lib/ch-ui
+        create_home: false
+
+    - name: Create empty CH-UI directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/ch-ui, owner: root, group: ch-ui, mode: "0750"}
+        - {path: /var/lib/ch-ui, owner: ch-ui, group: ch-ui, mode: "0700"}
+        - {path: /var/log/ch-ui, owner: ch-ui, group: ch-ui, mode: "0700"}
+        - {path: /usr/local/libexec, owner: root, group: root, mode: "0755"}
+
+    - name: Download pinned CH-UI binary
+      ansible.builtin.get_url:
+        url: "https://github.com/caioricciuti/ch-ui/releases/download/v{{ ch_ui_version }}/ch-ui-linux-amd64"
+        dest: /usr/local/bin/ch-ui
+        checksum: "sha256:{{ ch_ui_sha256 }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure CH-UI application state is absent before sealing
+      ansible.builtin.shell: rm -rf /var/lib/ch-ui/* /var/log/ch-ui/*
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Record immutable template contents and startup contract
+      ansible.builtin.copy:
+        dest: /etc/viberange-clickhouse-ir-template.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {
+            "schema_version": 1,
+            "template_name": "viberange-clickhouse-ir-debian12-v1-template",
+            "clickhouse_version": "{{ clickhouse_version }}",
+            "vector_version": "{{ vector_version }}",
+            "ch_ui_version": "{{ ch_ui_version }}",
+            "empty_clickhouse_schema_initialized": true,
+            "ch_ui_seed_assets_baked": true,
+            "jupyter_venv_ready": true,
+            "jupyter_wheelhouse_ready": true,
+            "range_configuration_required_at_first_boot": true
+          }
+
+    - name: Write bootstrap asset checksum manifest
+      ansible.builtin.shell: >-
+        find {{ bootstrap_dir | quote }} -type f -print0 |
+        sort -z | xargs -0 sha256sum > /etc/viberange-clickhouse-ir-assets.sha256
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Install first-boot SSH host-key regeneration unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/regenerate_ssh_host_keys.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Regenerate SSH host keys
+          Before=ssh.service
+
+          [Service]
+          Type=oneshot
+          ExecStartPre=-/bin/sh -c "/bin/rm -f -v /etc/ssh/ssh_host_*_key*"
+          ExecStart=/usr/bin/ssh-keygen -A -v
+          ExecStartPost=/bin/systemctl disable regenerate_ssh_host_keys
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable first-boot SSH host-key regeneration
+      ansible.builtin.systemd:
+        name: regenerate_ssh_host_keys.service
+        enabled: true
+        daemon_reload: true
+
+    - name: Verify baked versions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        dpkg-query -W -f='${Version}\n' clickhouse-common-static | grep -Fx {{ clickhouse_version | quote }}
+        /usr/bin/vector --version | grep -F {{ vector_version | quote }}
+        sha256sum /usr/local/bin/ch-ui | grep -F {{ ch_ui_sha256 | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Remove build-only packages and caches
+      ansible.builtin.shell: |
+        rm -f /var/tmp/clickhouse-common-static_*_amd64.deb /var/tmp/vector_*_amd64.deb
+        apt-get clean
+        rm -rf /tmp/* /var/tmp/ansible-*
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Clear host identity and interactive history before sealing
+      ansible.builtin.shell: |
+        truncate -s 0 /etc/machine-id
+        rm -f /var/lib/dbus/machine-id
+        rm -f /root/.bash_history /home/*/.bash_history
+        rm -f /etc/ssh/ssh_host_*_key*
+      args:
+        executable: /bin/bash
+      changed_when: true

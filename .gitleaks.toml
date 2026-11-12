@@ -1,0 +1,17 @@
+title = "VibeRange public-source secret scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Zeek repository signing-key digest and fingerprint pins"
+regexTarget = "match"
+regexes = [
+  '''(?i)(ludus_router_evidence_)?zeek_key_(sha256|fingerprint):\s*"[0-9a-f]+"'''
+]
+
+[[allowlists]]
+description = "Pinned upstream Ludus submodule is scanned by its own project"
+paths = [
+  '''^references/ludus/'''
+]

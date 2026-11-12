@@ -1,0 +1,36 @@
+[Unit]
+Description=VibeRange CH-UI ClickHouse workspace
+After=network-online.target clickhouse-server.service vector.service
+Wants=network-online.target
+Requires=clickhouse-server.service
+
+[Service]
+Type=simple
+User=ch-ui
+Group=ch-ui
+# Disk-only snapshot restores can leave a stale PID file whose PID has been
+# reused by an unrelated process. systemd owns the real service lifecycle.
+ExecStartPre=/usr/bin/rm -f /var/lib/ch-ui/ch-ui-server.pid
+ExecStart=/usr/local/bin/ch-ui server --config /etc/ch-ui/server.yaml
+WorkingDirectory=/var/lib/ch-ui
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/ch-ui /var/log/ch-ui
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

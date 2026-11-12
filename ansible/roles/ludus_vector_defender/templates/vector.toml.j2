@@ -1,0 +1,150 @@
+data_dir = "/var/lib/vector"
+
+[sources.edge_agents]
+type = "vector"
+address = "{{ ludus_vector_defender_listen_address }}"
+
+[sources.edge_agents.acknowledgements]
+enabled = true
+
+[sources.caldera_cli_exports]
+type = "file"
+include = ["/var/lib/viberange/caldera-cli/*.jsonl"]
+read_from = "end"
+max_line_bytes = 10485760
+
+[sources.caldera_cli_exports.fingerprint]
+strategy = "device_and_inode"
+
+[sources.vector_internal_logs]
+type = "internal_logs"
+
+[sources.vector_internal_metrics]
+type = "internal_metrics"
+
+[transforms.internal_log_envelope]
+type = "remap"
+inputs = ["vector_internal_logs"]
+source = '''
+.source_type = "vector_internal"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_defender_range_id }}"
+'''
+
+[transforms.caldera_cli_envelope]
+type = "remap"
+inputs = ["caldera_cli_exports"]
+source = '''
+file_path = to_string(.file) ?? ""
+.source_type = if contains(file_path, ".links.jsonl") { "caldera_link" } else { "caldera_operation" }
+.source_host = "kali-caldera"
+.range_id = "{{ ludus_vector_defender_range_id }}"
+'''
+
+[transforms.canonicalize]
+type = "remap"
+inputs = ["edge_agents", "internal_log_envelope", "caldera_cli_envelope"]
+source = '''
+metadata = encode_json(.)
+raw = to_string(.message) ?? encode_json(.)
+source_type = to_string(.source_type) ?? "unknown"
+source_host = to_string(.source_host) ?? "unknown"
+range_id = to_string(.range_id) ?? "{{ ludus_vector_defender_range_id }}"
+event_time = now()
+parse_error = null
+
+if includes(["linux_auditd", "kubernetes_audit", "tetragon", "caldera_operation", "zeek"], source_type) {
+  parsed, err = parse_json(raw)
+  if err != null {
+    parse_error = to_string(err)
+  } else {
+    if source_type == "linux_auditd" {
+      epoch = to_float(parsed.audit_epoch) ?? 0.0
+      if epoch > 0.0 {
+        nanos = to_int(epoch * 1000000000.0)
+        event_time = from_unix_timestamp(nanos, unit: "nanoseconds") ?? event_time
+      }
+    } else if source_type == "kubernetes_audit" {
+      stamp = to_string(parsed.stageTimestamp) ?? to_string(parsed.requestReceivedTimestamp) ?? ""
+      if stamp != "" { event_time = parse_timestamp(stamp, format: "%+") ?? event_time }
+    } else if source_type == "tetragon" {
+      stamp = to_string(parsed.time) ?? ""
+      if stamp != "" { event_time = parse_timestamp(stamp, format: "%+") ?? event_time }
+    } else if source_type == "zeek" {
+      epoch = to_float(parsed.ts) ?? 0.0
+      if epoch > 0.0 {
+        nanos = to_int(epoch * 1000000000.0)
+        event_time = from_unix_timestamp(nanos, unit: "nanoseconds") ?? event_time
+      }
+    }
+  }
+}
+
+. = {
+  "event_id": uuid_v4(),
+  "event_time": format_timestamp!(event_time, format: "%+"),
+  "ingested_time": format_timestamp!(now(), format: "%+"),
+  "source_type": source_type,
+  "source_host": source_host,
+  "range_id": range_id,
+  "message": raw,
+  "raw_data": raw,
+  "vector_metadata": metadata,
+  "parse_error": parse_error
+}
+'''
+
+[transforms.parse_failures]
+type = "filter"
+inputs = ["canonicalize"]
+condition = '.parse_error != null'
+
+[transforms.parse_error_rows]
+type = "remap"
+inputs = ["parse_failures"]
+source = '''
+. = {
+  "event_id": .event_id,
+  "event_time": .event_time,
+  "ingested_time": .ingested_time,
+  "source_type": .source_type,
+  "source_host": .source_host,
+  "range_id": .range_id,
+  "error": .parse_error,
+  "raw_data": .raw_data
+}
+'''
+
+[sinks.raw_events]
+type = "clickhouse"
+inputs = ["canonicalize"]
+endpoint = "{{ ludus_vector_defender_clickhouse_endpoint }}"
+database = "ir"
+table = "raw_events"
+compression = "gzip"
+skip_unknown_fields = true
+date_time_best_effort = true
+
+[sinks.raw_events.batch]
+timeout_secs = 2
+max_events = 500
+
+[sinks.raw_events.buffer]
+type = "disk"
+max_size = {{ ludus_vector_defender_disk_buffer_bytes }}
+when_full = "block"
+
+[sinks.parse_errors]
+type = "clickhouse"
+inputs = ["parse_error_rows"]
+endpoint = "{{ ludus_vector_defender_clickhouse_endpoint }}"
+database = "ir"
+table = "parse_errors"
+compression = "gzip"
+skip_unknown_fields = true
+date_time_best_effort = true
+
+[sinks.vector_metrics]
+type = "prometheus_exporter"
+inputs = ["vector_internal_metrics"]
+address = "0.0.0.0:9598"

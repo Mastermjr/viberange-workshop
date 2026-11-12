@@ -1,0 +1,19 @@
+Port {{ ludus_experiment_cli_router_port }}
+ListenAddress {{ ludus_experiment_cli_router_host }}
+AddressFamily inet
+Protocol 2
+HostKey /etc/ssh/ssh_host_ed25519_key
+PidFile /run/sshd-viberange-experiment.pid
+AuthorizedKeysFile {{ ludus_experiment_cli_router_authorized_keys }}
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+AllowUsers {{ ludus_experiment_cli_router_user }}
+DisableForwarding yes
+PermitTTY no
+X11Forwarding no
+ForceCommand {{ ludus_experiment_cli_router_wrapper }}
+LogLevel VERBOSE
+UsePAM no

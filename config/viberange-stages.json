@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "blueprint_version": "0.11.14",
+  "stages": {
+    "1": {
+      "name": "foundation",
+      "roles": [
+        "VibeRange.ludus_viberange_foundation"
+      ]
+    },
+    "2": {
+      "name": "analysis-storage",
+      "roles": [
+        "VibeRange.ludus_viberange_foundation",
+        "VibeRange.ludus_clickhouse_ir"
+      ]
+    },
+    "3": {
+      "name": "vector-collection-search-router-and-run-control",
+      "roles": [
+        "VibeRange.ludus_viberange_foundation",
+        "VibeRange.ludus_clickhouse_ir",
+        "VibeRange.ludus_vector_defender",
+        "VibeRange.ludus_vector_attacker",
+        "VibeRange.ludus_vector_router",
+        "VibeRange.ludus_router_evidence",
+        "VibeRange.ludus_run_control",
+        "VibeRange.ludus_ch_ui",
+        "VibeRange.ludus_jupyter",
+        "VibeRange.ludus_experiment_cli"
+      ]
+    },
+    "4": {
+      "name": "victim-telemetry",
+      "roles": [
+        "VibeRange.ludus_viberange_foundation",
+        "VibeRange.ludus_clickhouse_ir",
+        "VibeRange.ludus_vector_defender",
+        "VibeRange.ludus_vector_attacker",
+        "VibeRange.ludus_vector_router",
+        "VibeRange.ludus_router_evidence",
+        "VibeRange.ludus_run_control",
+        "VibeRange.ludus_ch_ui",
+        "VibeRange.ludus_jupyter",
+        "VibeRange.ludus_experiment_cli",
+        "VibeRange.ludus_k3s_goat",
+        "VibeRange.ludus_vector_victim"
+      ]
+    },
+    "5": {
+      "name": "detections",
+      "roles": [
+        "VibeRange.ludus_viberange_foundation",
+        "VibeRange.ludus_clickhouse_ir",
+        "VibeRange.ludus_vector_defender",
+        "VibeRange.ludus_vector_attacker",
+        "VibeRange.ludus_vector_router",
+        "VibeRange.ludus_router_evidence",
+        "VibeRange.ludus_run_control",
+        "VibeRange.ludus_ch_ui",
+        "VibeRange.ludus_jupyter",
+        "VibeRange.ludus_experiment_cli",
+        "VibeRange.ludus_k3s_goat",
+        "VibeRange.ludus_vector_victim",
+        "VibeRange.ludus_detection_runner"
+      ]
+    },
+    "6": {
+      "name": "purple-team-complete",
+      "roles": [
+        "VibeRange.ludus_viberange_foundation",
+        "VibeRange.ludus_clickhouse_ir",
+        "VibeRange.ludus_vector_defender",
+        "VibeRange.ludus_vector_attacker",
+        "VibeRange.ludus_vector_router",
+        "VibeRange.ludus_router_evidence",
+        "VibeRange.ludus_run_control",
+        "VibeRange.ludus_ch_ui",
+        "VibeRange.ludus_jupyter",
+        "VibeRange.ludus_experiment_cli",
+        "VibeRange.ludus_k3s_goat",
+        "VibeRange.ludus_vector_victim",
+        "VibeRange.ludus_detection_runner",
+        "cisagov.ludus_caldera_server",
+        "VibeRange.ludus_caldera_content",
+        "cisagov.ludus_caldera_agent"
+      ]
+    }
+  }
+}

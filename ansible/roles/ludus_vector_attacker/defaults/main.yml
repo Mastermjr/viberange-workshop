@@ -1,0 +1,7 @@
+---
+ludus_vector_attacker_version: "0.58.0"
+ludus_vector_attacker_aggregator_address: "10.{{ range_second_octet }}.10.10:6000"
+ludus_vector_attacker_audit_json_path: "/var/log/audit/audit.json.log"
+ludus_vector_attacker_caldera_export_glob: "/var/lib/viberange/caldera/*.jsonl"
+ludus_vector_attacker_disk_buffer_bytes: 268435488
+ludus_vector_attacker_range_id: "{{ range_id }}"

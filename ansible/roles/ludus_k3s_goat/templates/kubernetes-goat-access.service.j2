@@ -1,0 +1,15 @@
+[Unit]
+Description=Kubernetes Goat scenario port forwards
+After=k3s.service network-online.target
+Requires=k3s.service
+
+[Service]
+Type=simple
+WorkingDirectory={{ ludus_k3s_goat_install_dir }}
+Environment=KUBECONFIG={{ ludus_k3s_goat_kubeconfig }}
+ExecStart=/usr/local/bin/viberange-kubernetes-goat-access
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

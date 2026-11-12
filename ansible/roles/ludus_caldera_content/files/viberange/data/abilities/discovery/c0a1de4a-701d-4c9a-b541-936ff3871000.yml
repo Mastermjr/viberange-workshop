@@ -1,0 +1,14 @@
+---
+- id: c0a1de4a-701d-4c9a-b541-936ff3871000
+  name: VibeRange discover Kubernetes Goat services
+  description: Probe only the authorized, fact-supplied Kubernetes Goat scenario ports.
+  tactic: discovery
+  technique:
+    attack_id: T1046
+    name: Network Service Discovery
+  platforms:
+    linux:
+      sh:
+        command: >-
+          set -eu; for port in 1230 1231 1232 1233 1234 1235 1236; do code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://#{viberange.target.ip}:${port}/" || true); printf 'target=%s port=%s status=%s\n' '#{viberange.target.ip}' "$port" "$code"; done
+        timeout: 90

@@ -1,0 +1,233 @@
+#!/bin/bash
+set -euo pipefail
+
+BASE_DIR={{ ludus_router_evidence_base_dir | quote }}
+RUNTIME_DIR=/run/viberange-router-evidence
+ARTIFACT_SPOOL={{ (ludus_router_evidence_spool_dir + '/pcap-artifacts.jsonl') | quote }}
+ZEEK_SPOOL_DIR={{ ludus_router_evidence_zeek_spool_dir | quote }}
+CAPTURE_INTERFACE={{ ludus_router_evidence_resolved_interface | quote }}
+CAPTURE_FILTER={{ ludus_router_evidence_capture_filter | quote }}
+RANGE_ID={{ ludus_router_evidence_range_id | quote }}
+SOURCE_HOST={{ ludus_router_evidence_source_host | quote }}
+ANALYSIS_URL={{ ludus_router_evidence_analysis_url | quote }}
+MIN_FREE_KIB={{ ludus_router_evidence_min_free_kib }}
+ZEEK=/opt/zeek/bin/zeek
+FINALIZER=/usr/local/libexec/viberange-finalize-router-evidence
+ACTIVE_FILE="$RUNTIME_DIR/active.env"
+LOCK_FILE="$RUNTIME_DIR/controller.lock"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  viberange-router-evidence start RUN_ID
+  viberange-router-evidence stop [RUN_ID]
+  viberange-router-evidence replay RUN_ID REPLAY_ID
+  viberange-router-evidence status
+
+Only one capture may be active per router. RUN_ID must contain 1-64 ASCII
+letters, digits, underscores, or hyphens and may not start with punctuation.
+EOF
+  exit 2
+}
+
+validate_run_id() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || {
+    echo "invalid run ID: $1" >&2
+    exit 2
+  }
+}
+
+require_root() {
+  [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
+}
+
+load_active() {
+  [[ -r "$ACTIVE_FILE" ]] || { echo "no active capture" >&2; exit 1; }
+  # This file is root-owned and contains only controller-validated values.
+  # shellcheck disable=SC1090
+  source "$ACTIVE_FILE"
+}
+
+mkdir -p "$RUNTIME_DIR"
+chmod 0700 "$RUNTIME_DIR"
+exec 9>"$LOCK_FILE"
+flock -n 9 || { echo "capture controller is busy" >&2; exit 1; }
+
+command=${1:-}
+case "$command" in
+  start)
+    require_root
+    run_id=${2:-}
+    validate_run_id "$run_id"
+    [[ "$(timedatectl show --property=NTP --value)" == "yes" &&
+       "$(timedatectl show --property=NTPSynchronized --value)" == "yes" ]] || {
+      echo "router NTP is not enabled and synchronized" >&2
+      exit 1
+    }
+    [[ ! -e "$ACTIVE_FILE" ]] || { echo "a capture is already active" >&2; exit 1; }
+    run_dir="$BASE_DIR/runs/$run_id"
+    [[ ! -e "$run_dir" ]] || { echo "run already exists: $run_id" >&2; exit 1; }
+    free_kib=$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')
+    (( free_kib >= MIN_FREE_KIB )) || { echo "insufficient free space" >&2; exit 1; }
+
+    install -d -m 0700 "$run_dir"
+    capture_file="$run_dir/capture.pcap"
+    started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    env_file="$RUNTIME_DIR/${run_id}.env"
+    {
+      printf 'CAPTURE_INTERFACE=%q\n' "$CAPTURE_INTERFACE"
+      printf 'CAPTURE_FILTER=%q\n' "$CAPTURE_FILTER"
+      printf 'CAPTURE_FILE=%q\n' "$capture_file"
+    } >"$env_file"
+    chmod 0600 "$env_file"
+    {
+      printf 'RUN_ID=%q\n' "$run_id"
+      printf 'RUN_DIR=%q\n' "$run_dir"
+      printf 'CAPTURE_FILE=%q\n' "$capture_file"
+      printf 'STARTED_AT=%q\n' "$started_at"
+    } >"$ACTIVE_FILE"
+    chmod 0600 "$ACTIVE_FILE"
+
+    unit="viberange-pcap@${run_id}.service"
+    if ! systemctl start "$unit"; then
+      rm -f "$ACTIVE_FILE" "$env_file"
+      exit 1
+    fi
+    for _ in $(seq 1 20); do
+      systemctl is-active --quiet "$unit" && break
+      sleep 0.25
+    done
+    systemctl is-active --quiet "$unit" || {
+      systemctl status "$unit" --no-pager >&2 || true
+      rm -f "$ACTIVE_FILE" "$env_file"
+      exit 1
+    }
+    printf '{"run_id":"%s","started_at":"%s","interface":"%s","state":"capturing"}\n' \
+      "$run_id" "$started_at" "$CAPTURE_INTERFACE"
+    ;;
+
+  stop)
+    require_root
+    load_active
+    requested=${2:-$RUN_ID}
+    validate_run_id "$requested"
+    [[ "$requested" == "$RUN_ID" ]] || {
+      echo "active run is $RUN_ID, not $requested" >&2
+      exit 1
+    }
+    unit="viberange-pcap@${RUN_ID}.service"
+    systemctl stop "$unit" || true
+    for _ in $(seq 1 60); do
+      systemctl is-active --quiet "$unit" || break
+      sleep 0.5
+    done
+    systemctl is-active --quiet "$unit" && { echo "capture did not stop" >&2; exit 1; }
+    [[ -s "$CAPTURE_FILE" ]] || { echo "capture is empty" >&2; exit 1; }
+
+    ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    artifact_id=$(cat /proc/sys/kernel/random/uuid)
+    pcap_sha256=$(sha256sum "$CAPTURE_FILE" | awk '{print $1}')
+    size_bytes=$(stat -c %s "$CAPTURE_FILE")
+    packet_count=$(tcpdump -nn -r "$CAPTURE_FILE" 2>/dev/null | wc -l)
+    zeek_dir="$RUN_DIR/zeek"
+    rm -rf "$zeek_dir"
+    install -d -m 0700 "$zeek_dir"
+    (
+      cd "$zeek_dir"
+      "$ZEEK" -Cr "$CAPTURE_FILE" LogAscii::use_json=T local
+    )
+    zeek_version=$("$ZEEK" --version | awk '{print $NF}')
+
+    "$FINALIZER" \
+      --zeek-dir "$zeek_dir" \
+      --zeek-spool-dir "$ZEEK_SPOOL_DIR" \
+      --artifact-spool "$ARTIFACT_SPOOL" \
+      --manifest "$RUN_DIR/manifest.json" \
+      --run-id "$RUN_ID" \
+      --range-id "$RANGE_ID" \
+      --source-host "$SOURCE_HOST" \
+      --artifact-id "$artifact_id" \
+      --pcap-path "$CAPTURE_FILE" \
+      --pcap-sha256 "$pcap_sha256" \
+      --capture-interface "$CAPTURE_INTERFACE" \
+      --capture-filter "$CAPTURE_FILTER" \
+      --started-at "$STARTED_AT" \
+      --ended-at "$ended_at" \
+      --size-bytes "$size_bytes" \
+      --packet-count "$packet_count" \
+      --zeek-version "$zeek_version"
+
+    touch "$RUN_DIR/.sealed"
+    chmod -R go-rwx "$RUN_DIR"
+    rm -f "$ACTIVE_FILE" "$RUNTIME_DIR/${RUN_ID}.env"
+    ;;
+
+  replay)
+    require_root
+    run_id=${2:-}
+    replay_id=${3:-}
+    validate_run_id "$run_id"
+    validate_run_id "$replay_id"
+    [[ ! -e "$ACTIVE_FILE" ]] || { echo "cannot replay while a capture is active" >&2; exit 1; }
+    run_dir="$BASE_DIR/runs/$run_id"
+    manifest="$run_dir/manifest.json"
+    zeek_dir="$run_dir/zeek"
+    [[ -s "$manifest" && -d "$zeek_dir" && -e "$run_dir/.sealed" ]] || {
+      echo "sealed run not found: $run_id" >&2
+      exit 1
+    }
+
+    read -r manifest_run artifact_id expected_sha < <(
+      python3 - "$manifest" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+print(value.get("run_id", ""), value.get("artifact_id", ""), value.get("pcap_sha256", ""))
+PY
+    )
+    sha_length=$(printf '%s' "$expected_sha" | wc -c)
+    [[ "$manifest_run" == "$run_id" && -n "$artifact_id" && "$sha_length" -eq 64 ]] || {
+      echo "invalid sealed manifest" >&2
+      exit 1
+    }
+    actual_sha=$(sha256sum "$run_dir/capture.pcap" | awk '{print $1}')
+    [[ "$actual_sha" == "$expected_sha" ]] || { echo "sealed PCAP hash mismatch" >&2; exit 1; }
+
+    existing=$(curl -fsSG \
+      --data-urlencode "query=SELECT count() FROM ir.pcap_artifacts WHERE artifact_id='${artifact_id}' FORMAT TabSeparatedRaw" \
+      "$ANALYSIS_URL" | tr -d '[:space:]')
+    [[ "$existing" == "0" ]] || {
+      echo "artifact is already present in ClickHouse; replay refused" >&2
+      exit 1
+    }
+
+    replay_dir="$run_dir/replays"
+    install -d -m 0700 "$replay_dir"
+    [[ ! -e "$replay_dir/${replay_id}.done" && ! -e "$replay_dir/${replay_id}.pending" ]] || {
+      echo "replay ID already used: $replay_id" >&2
+      exit 1
+    }
+    install -m 0600 /dev/null "$replay_dir/${replay_id}.pending"
+    "$FINALIZER" replay \
+      --manifest "$manifest" \
+      --zeek-dir "$zeek_dir" \
+      --zeek-spool-dir "$ZEEK_SPOOL_DIR" \
+      --artifact-spool "$ARTIFACT_SPOOL" \
+      --replay-id "$replay_id"
+    mv "$replay_dir/${replay_id}.pending" "$replay_dir/${replay_id}.done"
+    ;;
+
+  status)
+    if [[ -r "$ACTIVE_FILE" ]]; then
+      load_active
+      state=stopped
+      systemctl is-active --quiet "viberange-pcap@${RUN_ID}.service" && state=capturing
+      printf '{"run_id":"%s","started_at":"%s","interface":"%s","state":"%s"}\n' \
+        "$RUN_ID" "$STARTED_AT" "$CAPTURE_INTERFACE" "$state"
+    else
+      printf '{"state":"idle"}\n'
+    fi
+    ;;
+
+  *) usage ;;
+esac

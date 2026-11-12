@@ -1,0 +1,91 @@
+---
+- name: Inspect installed Vector version
+  ansible.builtin.command: /usr/bin/vector --version
+  register: installed_vector_version
+  failed_when: false
+  changed_when: false
+
+- name: Install victim Vector prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [curl, ca-certificates]
+    state: present
+    update_cache: "{{ installed_vector_version.rc != 0 }}"
+
+- name: Download pinned Vector package
+  become: true
+  ansible.builtin.get_url:
+    url: "https://github.com/vectordotdev/vector/releases/download/v{{ ludus_vector_victim_version }}/vector_{{ ludus_vector_victim_version }}-1_amd64.deb"
+    dest: "/tmp/vector_{{ ludus_vector_victim_version }}_amd64.deb"
+    checksum: "sha256:{{ ludus_vector_victim_package_sha256 }}"
+    mode: "0644"
+  when: installed_vector_version.rc != 0 or ludus_vector_victim_version not in installed_vector_version.stdout
+
+- name: Install pinned Vector package
+  become: true
+  ansible.builtin.apt:
+    deb: "/tmp/vector_{{ ludus_vector_victim_version }}_amd64.deb"
+    state: present
+  when: installed_vector_version.rc != 0 or ludus_vector_victim_version not in installed_vector_version.stdout
+
+- name: Verify pinned victim Vector version
+  become: true
+  ansible.builtin.command: /usr/bin/vector --version
+  register: vector_version_result
+  changed_when: false
+  failed_when: ludus_vector_victim_version not in vector_version_result.stdout
+
+- name: Ensure victim Vector directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/vector
+    - /var/lib/vector
+
+- name: Ensure Kubernetes audit log exists for checkpointing
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_vector_victim_kubernetes_audit_path }}"
+    state: touch
+    owner: root
+    group: adm
+    mode: "0640"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Install victim Vector configuration
+  become: true
+  ansible.builtin.template:
+    src: vector.toml.j2
+    dest: /etc/vector/vector.toml
+    owner: root
+    group: root
+    mode: "0644"
+  register: vector_config
+
+- name: Validate victim Vector configuration
+  become: true
+  ansible.builtin.command: /usr/bin/vector validate --no-environment /etc/vector/vector.toml
+  changed_when: false
+
+- name: Install victim Vector systemd unit
+  become: true
+  ansible.builtin.template:
+    src: vector.service.j2
+    dest: /etc/systemd/system/vector.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and restart victim Vector
+  become: true
+  ansible.builtin.systemd:
+    name: vector.service
+    daemon_reload: true
+    enabled: true
+    state: restarted

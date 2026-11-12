@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "range_id": {{ range_id | to_json }},
+  "run_control_command": {{ ludus_experiment_cli_run_control_command | to_json }},
+  "router_host": {{ ludus_experiment_cli_router_host | to_json }},
+  "router_user": {{ ludus_experiment_cli_router_user | to_json }},
+  "router_port": {{ ludus_experiment_cli_router_port | int }},
+  "router_identity_file": {{ ludus_experiment_cli_router_identity | to_json }},
+  "router_known_hosts": {{ ludus_experiment_cli_router_known_hosts | to_json }},
+  "start_hook": {{ ludus_experiment_cli_start_hook | to_json }},
+  "stop_hook": {{ ludus_experiment_cli_stop_hook | to_json }},
+  "abort_hook": {{ ludus_experiment_cli_abort_hook | to_json }},
+  "caldera_url": {{ ludus_experiment_cli_caldera_url | to_json }},
+  "caldera_api_key": {{ experiment_cli_caldera_api_key | to_json }},
+  "caldera_source_id": {{ ludus_experiment_cli_caldera_source_id | to_json }},
+  "caldera_adversary_id": {{ ludus_experiment_cli_caldera_adversary_id | to_json }},
+  "caldera_group": {{ ludus_experiment_cli_caldera_group | to_json }},
+  "caldera_spool_dir": {{ ludus_experiment_cli_caldera_spool_dir | to_json }},
+  "caldera_expected_abilities": {{ ludus_experiment_cli_caldera_expected_abilities | to_json }}
+}

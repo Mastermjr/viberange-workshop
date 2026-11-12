@@ -1,0 +1,30 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  # Never persist Secret request/response bodies; metadata still proves access.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets"]
+
+  # Preserve scenario-relevant workload and authorization requests. Responses
+  # are intentionally omitted to reduce volume and accidental sensitive data.
+  - level: Request
+    omitStages: ["RequestReceived"]
+    resources:
+      - group: ""
+        resources: ["pods", "pods/exec", "services", "serviceaccounts", "configmaps"]
+      - group: "apps"
+        resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+      - group: "batch"
+        resources: ["jobs", "cronjobs"]
+      - group: "rbac.authorization.k8s.io"
+        resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+      - group: "authorization.k8s.io"
+        resources: ["selfsubjectaccessreviews", "subjectaccessreviews"]
+      - group: "networking.k8s.io"
+        resources: ["networkpolicies"]
+
+  # Keep control-plane provenance for all remaining requests without bodies.
+  - level: Metadata
+    omitStages: ["RequestReceived"]

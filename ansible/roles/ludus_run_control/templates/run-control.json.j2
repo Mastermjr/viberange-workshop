@@ -1,0 +1,8 @@
+{
+  "range_id": {{ ludus_run_control_range_id | to_json }},
+  "blueprint_version": {{ ludus_run_control_blueprint_version | to_json }},
+  "source_ref": {{ ludus_run_control_source_ref | to_json }},
+  "base_dir": {{ ludus_run_control_base_dir | to_json }},
+  "clickhouse_client": {{ ludus_run_control_clickhouse_client | to_json }},
+  "require_ntp": {{ ludus_run_control_require_ntp | bool | to_json }}
+}

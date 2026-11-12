@@ -1,0 +1,76 @@
+data_dir = "/var/lib/vector"
+
+[sources.auditd]
+type = "file"
+include = ["{{ ludus_vector_attacker_audit_json_path }}"]
+read_from = "end"
+max_line_bytes = 1048576
+
+[sources.auditd.fingerprint]
+strategy = "device_and_inode"
+
+[sources.caldera_exports]
+type = "file"
+include = ["{{ ludus_vector_attacker_caldera_export_glob }}"]
+read_from = "end"
+max_line_bytes = 10485760
+
+[sources.caldera_exports.fingerprint]
+strategy = "device_and_inode"
+
+[sources.vector_internal_logs]
+type = "internal_logs"
+
+[transforms.auditd_envelope]
+type = "remap"
+inputs = ["auditd"]
+source = '''
+.source_type = "linux_auditd"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_attacker_range_id }}"
+'''
+
+[transforms.caldera_envelope]
+type = "remap"
+inputs = ["caldera_exports"]
+source = '''
+file_path = to_string(.file) ?? ""
+.source_type = if contains(file_path, ".links.jsonl") {
+  "caldera_link"
+} else {
+  "caldera_operation"
+}
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_attacker_range_id }}"
+'''
+
+[transforms.internal_log_envelope]
+type = "remap"
+inputs = ["vector_internal_logs"]
+source = '''
+.source_type = "vector_internal"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_attacker_range_id }}"
+'''
+
+[sinks.central_vector]
+type = "vector"
+inputs = ["auditd_envelope", "caldera_envelope"]
+address = "{{ ludus_vector_attacker_aggregator_address }}"
+version = "2"
+
+[sinks.central_vector.acknowledgements]
+enabled = true
+
+[sinks.central_vector.buffer]
+type = "disk"
+max_size = {{ ludus_vector_attacker_disk_buffer_bytes }}
+when_full = "block"
+
+# Internal logs cannot participate in end-to-end acknowledgements. Keep them on
+# a separate best-effort health channel so they do not weaken file checkpoints.
+[sinks.central_vector_health]
+type = "vector"
+inputs = ["internal_log_envelope"]
+address = "{{ ludus_vector_attacker_aggregator_address }}"
+version = "2"

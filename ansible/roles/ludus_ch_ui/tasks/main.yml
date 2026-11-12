@@ -1,0 +1,336 @@
+---
+- name: Install CH-UI prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, openssl, python3]
+    state: present
+    update_cache: true
+
+- name: Create CH-UI service account
+  become: true
+  ansible.builtin.user:
+    name: ch-ui
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/ch-ui
+    create_home: false
+
+- name: Create CH-UI configuration and state directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/ch-ui, owner: root, group: ch-ui, mode: "0750"}
+    - {path: /var/lib/ch-ui, owner: ch-ui, group: ch-ui, mode: "0700"}
+    - {path: /var/log/ch-ui, owner: ch-ui, group: ch-ui, mode: "0700"}
+    - {path: /usr/local/libexec, owner: root, group: root, mode: "0755"}
+
+- name: Download pinned CH-UI binary
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ ludus_ch_ui_download_url }}"
+    dest: /usr/local/bin/ch-ui
+    checksum: "sha256:{{ ludus_ch_ui_sha256 }}"
+    owner: root
+    group: root
+    mode: "0755"
+  register: ch_ui_binary
+
+- name: Install CH-UI server configuration
+  become: true
+  ansible.builtin.template:
+    src: server.yaml.j2
+    dest: /etc/ch-ui/server.yaml
+    owner: root
+    group: ch-ui
+    mode: "0640"
+  register: ch_ui_config
+
+- name: Install CH-UI systemd service
+  become: true
+  ansible.builtin.template:
+    src: ch-ui.service.j2
+    dest: /etc/systemd/system/ch-ui.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: ch_ui_unit
+
+- name: Enable and start CH-UI
+  become: true
+  ansible.builtin.systemd:
+    name: ch-ui.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if ch_ui_binary.changed or ch_ui_config.changed or ch_ui_unit.changed else 'started' }}"
+
+- name: Wait for CH-UI health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ludus_ch_ui_port }}/health"
+    return_content: true
+  register: ch_ui_health
+  retries: 30
+  delay: 2
+  until: ch_ui_health.status == 200
+
+- name: Check participant ClickHouse password file
+  become: true
+  ansible.builtin.stat:
+    path: "{{ ludus_ch_ui_reader_password_file }}"
+  register: ch_ui_reader_password_file
+
+- name: Generate participant ClickHouse password
+  become: true
+  ansible.builtin.shell: >-
+    umask 077 && openssl rand -hex 16 > {{ ludus_ch_ui_reader_password_file | quote }}
+  when: not ch_ui_reader_password_file.stat.exists
+  no_log: true
+
+- name: Read participant ClickHouse password
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ ludus_ch_ui_reader_password_file }}"
+  register: ch_ui_reader_password_encoded
+  no_log: true
+
+- name: Set participant ClickHouse password fact
+  ansible.builtin.set_fact:
+    ch_ui_reader_password: "{{ ch_ui_reader_password_encoded.content | b64decode | trim }}"
+  no_log: true
+
+- name: Create read-only ClickHouse participant account
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --query
+      - >-
+        CREATE USER IF NOT EXISTS {{ ludus_ch_ui_reader_username }}
+        IDENTIFIED WITH sha256_password BY '{{ ch_ui_reader_password }}'
+  changed_when: false
+  no_log: true
+
+- name: Grant participant access to VibeRange evidence
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --multiquery
+      - --query
+      - >-
+        GRANT SELECT ON ir.* TO {{ ludus_ch_ui_reader_username }};
+        GRANT SELECT ON system.databases TO {{ ludus_ch_ui_reader_username }};
+        GRANT SELECT ON system.tables TO {{ ludus_ch_ui_reader_username }};
+        GRANT SELECT ON system.columns TO {{ ludus_ch_ui_reader_username }};
+        GRANT SELECT ON system.processes TO {{ ludus_ch_ui_reader_username }};
+        GRANT SELECT ON system.query_log TO {{ ludus_ch_ui_reader_username }};
+  changed_when: false
+
+- name: Write root-only participant credential handoff
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ ludus_ch_ui_reader_handoff_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      URL=http://{{ ansible_default_ipv4.address }}:{{ ludus_ch_ui_port }}
+      USERNAME={{ ludus_ch_ui_reader_username }}
+      PASSWORD={{ ch_ui_reader_password }}
+  no_log: true
+
+- name: Install CH-UI seed helper
+  become: true
+  ansible.builtin.copy:
+    src: seed_ch_ui.py
+    dest: /usr/local/libexec/viberange-seed-ch-ui
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install CH-UI participant validation helper
+  become: true
+  ansible.builtin.copy:
+    src: validate_ch_ui_reader.py
+    dest: /usr/local/libexec/viberange-validate-ch-ui-reader
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install VibeRange saved-search catalog
+  become: true
+  ansible.builtin.template:
+    src: search-catalog.json.j2
+    dest: /etc/ch-ui/viberange-search-catalog.json
+    owner: root
+    group: ch-ui
+    mode: "0640"
+  register: ch_ui_search_catalog
+
+- name: Install VibeRange live-evidence dashboard definition
+  become: true
+  ansible.builtin.template:
+    src: live-evidence-dashboard.json.j2
+    dest: /etc/ch-ui/viberange-live-evidence-dashboard.json
+    owner: root
+    group: ch-ui
+    mode: "0640"
+  register: ch_ui_dashboard
+
+- name: Install Kubernetes telemetry proof dashboard definition
+  become: true
+  ansible.builtin.template:
+    src: kubernetes-telemetry-dashboard.json.j2
+    dest: /etc/ch-ui/viberange-kubernetes-telemetry-dashboard.json
+    owner: root
+    group: ch-ui
+    mode: "0640"
+  register: ch_ui_kubernetes_dashboard
+
+- name: Install all-workload Kubernetes telemetry dashboard definition
+  become: true
+  ansible.builtin.template:
+    src: kubernetes-telemetry-all-dashboard.json.j2
+    dest: /etc/ch-ui/viberange-kubernetes-telemetry-all-dashboard.json
+    owner: root
+    group: ch-ui
+    mode: "0640"
+  register: ch_ui_kubernetes_all_dashboard
+
+- name: Seed shared VibeRange searches and dashboard
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/viberange-seed-ch-ui
+      - --url
+      - "http://127.0.0.1:{{ ludus_ch_ui_port }}"
+      - --catalog
+      - /etc/ch-ui/viberange-search-catalog.json
+      - --dashboard
+      - /etc/ch-ui/viberange-live-evidence-dashboard.json
+      - --username
+      - "{{ ludus_ch_ui_bootstrap_username }}"
+  environment:
+    CHUI_BOOTSTRAP_PASSWORD: "{{ ludus_ch_ui_bootstrap_password }}"
+  when: ludus_ch_ui_seed_catalog | bool
+  register: ch_ui_seed_result
+  changed_when: >-
+    '"created": 0' not in ch_ui_seed_result.stdout or
+    '"updated": 0' not in ch_ui_seed_result.stdout or
+    '"dashboard_updated": true' in ch_ui_seed_result.stdout
+  no_log: true
+
+- name: Seed Kubernetes telemetry proof dashboard
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/viberange-seed-ch-ui
+      - --url
+      - "http://127.0.0.1:{{ ludus_ch_ui_port }}"
+      - --catalog
+      - /etc/ch-ui/viberange-search-catalog.json
+      - --dashboard
+      - /etc/ch-ui/viberange-kubernetes-telemetry-dashboard.json
+      - --username
+      - "{{ ludus_ch_ui_bootstrap_username }}"
+  environment:
+    CHUI_BOOTSTRAP_PASSWORD: "{{ ludus_ch_ui_bootstrap_password }}"
+  when: ludus_ch_ui_seed_catalog | bool
+  register: ch_ui_kubernetes_seed_result
+  changed_when: >-
+    '"created": 0' not in ch_ui_kubernetes_seed_result.stdout or
+    '"updated": 0' not in ch_ui_kubernetes_seed_result.stdout or
+    '"dashboard_updated": true' in ch_ui_kubernetes_seed_result.stdout
+  no_log: true
+
+- name: Seed all-workload Kubernetes telemetry dashboard
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/viberange-seed-ch-ui
+      - --url
+      - "http://127.0.0.1:{{ ludus_ch_ui_port }}"
+      - --catalog
+      - /etc/ch-ui/viberange-search-catalog.json
+      - --dashboard
+      - /etc/ch-ui/viberange-kubernetes-telemetry-all-dashboard.json
+      - --username
+      - "{{ ludus_ch_ui_bootstrap_username }}"
+  environment:
+    CHUI_BOOTSTRAP_PASSWORD: "{{ ludus_ch_ui_bootstrap_password }}"
+  when: ludus_ch_ui_seed_catalog | bool
+  register: ch_ui_kubernetes_all_seed_result
+  changed_when: >-
+    '"created": 0' not in ch_ui_kubernetes_all_seed_result.stdout or
+    '"updated": 0' not in ch_ui_kubernetes_all_seed_result.stdout or
+    '"dashboard_updated": true' in ch_ui_kubernetes_all_seed_result.stdout
+  no_log: true
+
+- name: Validate participant CH-UI session, catalog, dashboard, and viewer boundary
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/viberange-validate-ch-ui-reader
+      - --url
+      - "http://127.0.0.1:{{ ludus_ch_ui_port }}"
+      - --username
+      - "{{ ludus_ch_ui_reader_username }}"
+      - --range-id
+      - "{{ ludus_ch_ui_range_id }}"
+  environment:
+    CHUI_READER_PASSWORD: "{{ ch_ui_reader_password }}"
+  register: ch_ui_reader_validation
+  changed_when: false
+  no_log: true
+
+- name: Verify participant account can query authoritative evidence
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --user
+      - "{{ ludus_ch_ui_reader_username }}"
+      - --password
+      - "{{ ch_ui_reader_password }}"
+      - --query
+      - "SELECT count() FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}'"
+  register: ch_ui_reader_query
+  changed_when: false
+  no_log: true
+
+- name: Verify participant account is read-only
+  become: true
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --user
+      - "{{ ludus_ch_ui_reader_username }}"
+      - --password
+      - "{{ ch_ui_reader_password }}"
+      - --query
+      - "CREATE TABLE ir.ch_ui_write_test (value UInt8) ENGINE = Memory"
+  register: ch_ui_reader_write_attempt
+  changed_when: false
+  failed_when: ch_ui_reader_write_attempt.rc == 0
+  no_log: true
+
+- name: Restart CH-UI for persistence validation
+  become: true
+  ansible.builtin.systemd:
+    name: ch-ui.service
+    state: restarted
+  when: ludus_ch_ui_validate_restart | bool
+
+- name: Wait for CH-UI after persistence-validation restart
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ludus_ch_ui_port }}/health"
+    return_content: true
+  register: ch_ui_restart_health
+  retries: 30
+  delay: 2
+  until: ch_ui_restart_health.status == 200
+  when: ludus_ch_ui_validate_restart | bool

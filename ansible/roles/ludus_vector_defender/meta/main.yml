@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: ludus_vector_defender
+  author: VibeRange
+  description: Receive, parse, preserve, and route forensic evidence through central Vector
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [all]
+dependencies: []

@@ -1,0 +1,68 @@
+---
+- name: Create Linux agent directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_caldera_agent_linux_path | dirname }}"
+    state: directory
+    owner: "{{ ludus_caldera_agent_linux_user }}"
+    group: "{{ ludus_caldera_agent_linux_user }}"
+    mode: "0750"
+
+- name: Download Linux Sandcat agent from Caldera
+  become: true
+  ansible.builtin.get_url:
+    url: "http://{{ _caldera_server_ip }}:{{ ludus_caldera_agent_server_port }}/file/download"
+    dest: "{{ ludus_caldera_agent_linux_path }}"
+    headers:
+      platform: linux
+      file: sandcat.go
+    owner: "{{ ludus_caldera_agent_linux_user }}"
+    group: "{{ ludus_caldera_agent_linux_user }}"
+    mode: "0750"
+    force: true
+  register: caldera_linux_agent
+  retries: 12
+  delay: 10
+  until: caldera_linux_agent is succeeded
+
+- name: Deploy Linux Caldera agent service
+  become: true
+  ansible.builtin.template:
+    src: caldera-agent.service.j2
+    dest: "/etc/systemd/system/{{ ludus_caldera_agent_linux_service }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and restart Linux Caldera agent
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ ludus_caldera_agent_linux_service }}.service"
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Read local Caldera API key for agent readiness
+  become: true
+  ansible.builtin.shell: >-
+    awk '/api_key_red/{print $2; exit}' /opt/caldera/conf/default.yml
+  register: caldera_agent_readiness_key
+  changed_when: false
+  no_log: true
+
+- name: Wait for Linux Caldera agent check-in
+  ansible.builtin.uri:
+    url: "http://{{ _caldera_server_ip }}:{{ ludus_caldera_agent_server_port }}/api/v2/agents"
+    headers:
+      KEY: "{{ caldera_agent_readiness_key.stdout }}"
+    return_content: true
+    status_code: 200
+  register: caldera_linux_agents
+  retries: 30
+  delay: 5
+  until: >-
+    (caldera_linux_agents.json |
+    selectattr('group', 'equalto', ludus_caldera_agent_group) |
+    list | length) > 0
+  changed_when: false
+  no_log: true

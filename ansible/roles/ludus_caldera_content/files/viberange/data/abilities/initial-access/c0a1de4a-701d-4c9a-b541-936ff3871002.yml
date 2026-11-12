@@ -1,0 +1,14 @@
+---
+- id: c0a1de4a-701d-4c9a-b541-936ff3871002
+  name: VibeRange access Kubernetes Goat system monitor
+  description: Establish a bounded GoTTY session to the authorized system-monitor workload and emit the run marker.
+  tactic: initial-access
+  technique:
+    attack_id: T1190
+    name: Exploit Public-Facing Application
+  platforms:
+    linux:
+      sh:
+        command: >-
+          command_b64=$(printf '%s' 'printf "VIBERANGE_FOOTHOLD=%s\\n" "#{viberange.run.id}"' | base64 -w0); /usr/local/bin/viberange-gotty-exec --url "http://#{viberange.target.ip}:#{viberange.target.system_monitor_port}" --command-b64 "$command_b64"
+        timeout: 60

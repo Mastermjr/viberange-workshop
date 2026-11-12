@@ -1,0 +1,14 @@
+---
+- id: c0a1de4a-701d-4c9a-b541-936ff3871001
+  name: VibeRange stage bounded run input
+  description: Hash the fact-supplied run identifier without persisting a payload.
+  tactic: resource-development
+  technique:
+    attack_id: T1587
+    name: Develop Capabilities
+  platforms:
+    linux:
+      sh:
+        command: |
+          printf '%s\n' '#{viberange.run.id}' | sha256sum
+        timeout: 30

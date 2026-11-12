@@ -1,0 +1,183 @@
+---
+- name: Prepare the generic VibeRange router template
+  hosts: all
+  become: true
+  vars:
+    zeek_package_version: "9.0.1-0"
+    zeek_binary_version: "9.0.1"
+    zeek_repository: "https://download.opensuse.org/repositories/security:/zeek/Debian_12/"
+    zeek_key_url: "https://download.opensuse.org/repositories/security:/zeek/Debian_12/Release.key"
+    zeek_key_sha256: "b67ae73b8543af4195c930b52a07c208611253fdc519873adcf1190ffcfc1377"
+    zeek_key_fingerprint: "F9FA0223B56B116C363737EF5DA57BDD6DD785CA"
+    vector_version: "0.58.0"
+    vector_package_sha256: "bf9f6241ebf8e2dde3fa4e99d07e1daccf99f0c266b04608a4f0d1dd3a7e96cf"
+  tasks:
+    - name: Install generic router prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3
+          - systemd-timesyncd
+          - tcpdump
+          - util-linux
+        state: present
+        update_cache: true
+
+    - name: Download pinned Zeek repository key
+      ansible.builtin.get_url:
+        url: "{{ zeek_key_url }}"
+        dest: /usr/share/keyrings/zeek-obs.asc
+        checksum: "sha256:{{ zeek_key_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Verify Zeek repository key fingerprint
+      ansible.builtin.shell: >-
+        set -o pipefail &&
+        gpg --show-keys --with-colons /usr/share/keyrings/zeek-obs.asc |
+        awk -F: '$1 == "fpr" {print $10; exit}' |
+        grep -Fx {{ zeek_key_fingerprint | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Install Zeek repository keyring
+      ansible.builtin.shell: >-
+        gpg --dearmor --yes --output /usr/share/keyrings/zeek-obs.gpg
+        /usr/share/keyrings/zeek-obs.asc &&
+        chmod 0644 /usr/share/keyrings/zeek-obs.gpg
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Configure Zeek package repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [signed-by=/usr/share/keyrings/zeek-obs.gpg]
+          {{ zeek_repository }} /
+        filename: zeek
+        state: present
+        update_cache: true
+
+    - name: Install pinned Zeek and capture packages
+      ansible.builtin.apt:
+        name: "zeek={{ zeek_package_version }}"
+        state: present
+        allow_downgrade: true
+
+    - name: Download pinned Vector package
+      ansible.builtin.get_url:
+        url: "https://github.com/vectordotdev/vector/releases/download/v{{ vector_version }}/vector_{{ vector_version }}-1_amd64.deb"
+        dest: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        checksum: "sha256:{{ vector_package_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install pinned Vector package
+      ansible.builtin.apt:
+        deb: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        state: present
+
+    - name: Disable unconfigured Vector in the generic image
+      ansible.builtin.systemd:
+        name: vector.service
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Remove package-default Vector configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/vector/vector.yaml
+        - /etc/vector/vector.yml
+
+    - name: Enable system time synchronization
+      ansible.builtin.systemd:
+        name: systemd-timesyncd.service
+        enabled: true
+        state: started
+
+    - name: Create generic evidence directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/vector, mode: "0755"}
+        - {path: /var/lib/vector, mode: "0755"}
+        - {path: /var/lib/viberange-router-evidence, mode: "0700"}
+        - {path: /var/lib/viberange-router-evidence/runs, mode: "0700"}
+        - {path: /var/log/viberange-router, mode: "0750"}
+        - {path: /var/log/zeek/current, mode: "0750"}
+        - {path: /usr/local/libexec, mode: "0755"}
+
+    - name: Record immutable router template contents
+      ansible.builtin.copy:
+        dest: /etc/viberange-router-template.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {
+            "schema_version": 1,
+            "template_name": "viberange-router-debian12-v1-template",
+            "zeek_package_version": "{{ zeek_package_version }}",
+            "zeek_binary_version": "{{ zeek_binary_version }}",
+            "vector_version": "{{ vector_version }}",
+            "packages_preinstalled": true
+          }
+
+    - name: Install first-boot SSH host-key regeneration unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/regenerate_ssh_host_keys.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Regenerate SSH host keys
+          Before=ssh.service
+
+          [Service]
+          Type=oneshot
+          ExecStartPre=-/bin/sh -c "/bin/rm -f -v /etc/ssh/ssh_host_*_key*"
+          ExecStart=/usr/bin/ssh-keygen -A -v
+          ExecStartPost=/bin/systemctl disable regenerate_ssh_host_keys
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable first-boot SSH host-key regeneration
+      ansible.builtin.systemd:
+        name: regenerate_ssh_host_keys.service
+        enabled: true
+        daemon_reload: true
+
+    - name: Verify baked Zeek version
+      ansible.builtin.command: /opt/zeek/bin/zeek --version
+      register: zeek_version_result
+      changed_when: false
+      failed_when: "('version ' + zeek_binary_version) not in zeek_version_result.stdout"
+
+    - name: Verify baked Vector version
+      ansible.builtin.command: /usr/bin/vector --version
+      register: vector_version_result
+      changed_when: false
+      failed_when: vector_version not in vector_version_result.stdout
+
+    - name: Remove build-only Vector package
+      ansible.builtin.file:
+        path: "/var/tmp/vector_{{ vector_version }}_amd64.deb"
+        state: absent
+
+    - name: Clear APT package cache
+      ansible.builtin.command: apt-get clean
+      changed_when: true

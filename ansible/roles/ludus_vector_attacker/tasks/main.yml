@@ -1,0 +1,147 @@
+---
+- name: Install attacker audit prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [auditd, audispd-plugins, curl, ca-certificates, python3]
+    state: present
+    update_cache: true
+
+- name: Install attacker audit rules
+  become: true
+  ansible.builtin.template:
+    src: harness.rules.j2
+    dest: /etc/audit/rules.d/harness.rules
+    owner: root
+    group: root
+    mode: "0640"
+  register: attacker_audit_rules
+
+- name: Install audit JSON writer
+  become: true
+  ansible.builtin.template:
+    src: audisp-json-writer.py.j2
+    dest: /usr/local/bin/viberange-audisp-json
+    owner: root
+    group: root
+    mode: "0755"
+  register: audit_json_writer
+
+- name: Ensure audit plugin directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/audit/plugins.d
+    state: directory
+    mode: "0755"
+
+- name: Configure audit JSON dispatcher
+  become: true
+  ansible.builtin.template:
+    src: viberange-json.conf.j2
+    dest: /etc/audit/plugins.d/viberange-json.conf
+    owner: root
+    group: root
+    mode: "0640"
+  register: audit_json_plugin
+
+- name: Ensure audit JSON output exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ ludus_vector_attacker_audit_json_path }}"
+    state: touch
+    owner: root
+    group: adm
+    mode: "0640"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Load audit rules
+  become: true
+  ansible.builtin.command: augenrules --load
+  when: attacker_audit_rules.changed
+  changed_when: true
+
+- name: Enable attacker auditd across cold boots and snapshot restores
+  become: true
+  ansible.builtin.command: systemctl enable auditd.service
+  register: attacker_auditd_enable
+  changed_when: "'Created symlink' in attacker_auditd_enable.stderr"
+
+- name: Ensure attacker auditd is running
+  become: true
+  ansible.builtin.command: service auditd start
+  changed_when: false
+
+- name: Restart auditd for JSON dispatcher changes
+  become: true
+  ansible.builtin.command: service auditd restart
+  when: attacker_audit_rules.changed or audit_json_writer.changed or audit_json_plugin.changed
+  changed_when: true
+
+- name: Check Vector binary
+  ansible.builtin.stat:
+    path: /usr/bin/vector
+  register: vector_binary
+
+- name: Download pinned Vector package
+  become: true
+  ansible.builtin.get_url:
+    url: "https://github.com/vectordotdev/vector/releases/download/v{{ ludus_vector_attacker_version }}/vector_{{ ludus_vector_attacker_version }}-1_amd64.deb"
+    dest: "/tmp/vector_{{ ludus_vector_attacker_version }}_amd64.deb"
+    mode: "0644"
+  when: not vector_binary.stat.exists
+
+- name: Install pinned Vector package
+  become: true
+  ansible.builtin.apt:
+    deb: "/tmp/vector_{{ ludus_vector_attacker_version }}_amd64.deb"
+    state: present
+  when: not vector_binary.stat.exists
+
+- name: Ensure Vector state and Caldera export directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/vector
+    - /var/lib/vector
+    - /var/lib/viberange/caldera
+
+- name: Install attacker Vector configuration
+  become: true
+  ansible.builtin.template:
+    src: vector.toml.j2
+    dest: /etc/vector/vector.toml
+    owner: root
+    group: root
+    mode: "0644"
+  register: vector_config
+
+- name: Validate attacker Vector configuration
+  become: true
+  ansible.builtin.command: /usr/bin/vector validate --no-environment /etc/vector/vector.toml
+  changed_when: false
+
+- name: Install Vector systemd unit
+  become: true
+  ansible.builtin.template:
+    src: vector.service.j2
+    dest: /etc/systemd/system/vector.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and restart attacker Vector
+  become: true
+  ansible.builtin.systemd:
+    name: vector.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Generate audit pipeline smoke event
+  ansible.builtin.command: /bin/echo viberange-attacker-telemetry-smoke
+  changed_when: false

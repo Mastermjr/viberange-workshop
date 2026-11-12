@@ -1,0 +1,27 @@
+# Bounded policies: only workload namespaces relevant to the workshop.
+# Process lifecycle is emitted by Tetragon without an additional policy.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: viberange-tcp-connect
+  namespace: default
+spec:
+  kprobes:
+    - call: tcp_connect
+      syscall: false
+      args:
+        - index: 0
+          type: sock
+---
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: viberange-tcp-connect
+  namespace: {{ ludus_k3s_goat_tetragon_validation_namespace }}
+spec:
+  kprobes:
+    - call: tcp_connect
+      syscall: false
+      args:
+        - index: 0
+          type: sock

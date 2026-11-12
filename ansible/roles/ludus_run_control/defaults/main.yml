@@ -1,0 +1,8 @@
+---
+ludus_run_control_range_id: "{{ range_id }}"
+ludus_run_control_blueprint_version: "{{ ludus_extensions.viberange.blueprint_version }}"
+ludus_run_control_source_ref: "v{{ ludus_extensions.viberange.blueprint_version }}"
+ludus_run_control_base_dir: /var/lib/viberange-runs
+ludus_run_control_config_path: /etc/viberange-run-control.json
+ludus_run_control_clickhouse_client: /usr/bin/clickhouse-client
+ludus_run_control_require_ntp: true

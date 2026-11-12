@@ -1,0 +1,80 @@
+{
+  "dashboard": {
+    "name": "VibeRange Kubernetes Telemetry — {{ ludus_ch_ui_range_id }} (All Workloads)",
+    "description": "Range-wide Kubernetes API audit, Tetragon runtime, socket, and container-log evidence across all namespaces and workloads."
+  },
+  "panels": [
+    {
+      "name": "Kubernetes audit events",
+      "description": "API audit records across all namespaces in the assigned range.",
+      "panel_type": "stat",
+      "query": "SELECT count() AS events FROM ir.kubernetes_audit WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "events"},
+      "layout_x": 0, "layout_y": 0, "layout_w": 3, "layout_h": 3
+    },
+    {
+      "name": "Tetragon runtime events",
+      "description": "Process and policy events across all namespaces in the assigned range.",
+      "panel_type": "stat",
+      "query": "SELECT count() AS events FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "events"},
+      "layout_x": 3, "layout_y": 0, "layout_w": 3, "layout_h": 3
+    },
+    {
+      "name": "Bounded TCP observations",
+      "description": "TCP connection events observed by Tetragon across instrumented workloads.",
+      "panel_type": "stat",
+      "query": "SELECT count() AS connections FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND event_type = 'process_kprobe' AND function_name = 'tcp_connect'",
+      "config": {"chartType": "stat", "valueColumn": "connections"},
+      "layout_x": 6, "layout_y": 0, "layout_w": 3, "layout_h": 3
+    },
+    {
+      "name": "Container log rows",
+      "description": "CRI stdout and stderr retained across all victim workloads.",
+      "panel_type": "stat",
+      "query": "SELECT count() AS rows FROM ir.container_logs WHERE range_id = '{{ ludus_ch_ui_range_id }}'",
+      "config": {"chartType": "stat", "valueColumn": "rows"},
+      "layout_x": 9, "layout_y": 0, "layout_w": 3, "layout_h": 3
+    },
+    {
+      "name": "Kubernetes API activity",
+      "description": "Recent API operations recorded across all namespaces.",
+      "panel_type": "table",
+      "query": "SELECT event_time, username, verb, resource, namespace, object_name, response_code FROM ir.kubernetes_audit WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 200",
+      "config": {"chartType": "table"},
+      "layout_x": 0, "layout_y": 3, "layout_w": 12, "layout_h": 5
+    },
+    {
+      "name": "Tetragon process lineage",
+      "description": "Typed process lifecycle across all Kubernetes workloads.",
+      "panel_type": "table",
+      "query": "SELECT event_time, event_type, pod_name, container_name, pid, parent_pid, binary, arguments, exec_id, parent_exec_id FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY ingested_time DESC LIMIT 200",
+      "config": {"chartType": "table"},
+      "layout_x": 0, "layout_y": 8, "layout_w": 12, "layout_h": 6
+    },
+    {
+      "name": "Tetragon socket proof",
+      "description": "Socket tuples extracted from raw policy arguments while stable process fields remain typed.",
+      "panel_type": "table",
+      "query": "WITH JSONExtractRaw(arrayElement(JSONExtractArrayRaw(raw_data, 'process_kprobe', 'args'), 1), 'sock_arg') AS sock SELECT event_time, pod_name, container_name, binary, policy_name, function_name, JSONExtractString(sock, 'saddr') AS src_ip, JSONExtractUInt(sock, 'sport') AS src_port, JSONExtractString(sock, 'daddr') AS dst_ip, JSONExtractUInt(sock, 'dport') AS dst_port FROM ir.tetragon_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND event_type = 'process_kprobe' AND function_name = 'tcp_connect' ORDER BY ingested_time DESC LIMIT 200",
+      "config": {"chartType": "table"},
+      "layout_x": 0, "layout_y": 14, "layout_w": 12, "layout_h": 5
+    },
+    {
+      "name": "Container workload output",
+      "description": "Recent stdout and stderr retained from all victim containers.",
+      "panel_type": "table",
+      "query": "SELECT event_time, stream, file_path, message FROM ir.container_logs WHERE range_id = '{{ ludus_ch_ui_range_id }}' ORDER BY event_time DESC LIMIT 200",
+      "config": {"chartType": "table"},
+      "layout_x": 0, "layout_y": 19, "layout_w": 12, "layout_h": 6
+    },
+    {
+      "name": "Victim Vector forwarding freshness",
+      "description": "Actual victim files arriving through edge Vector, central Vector, and the ClickHouse raw landing table. Idle Tetragon is distinguished from a stale transport by the other victim sources and explicit ingestion ages.",
+      "panel_type": "table",
+      "query": "SELECT source_type, countIf(ingested_time > now() - INTERVAL 5 MINUTE) AS rows_5m, max(ingested_time) AS last_ingest, dateDiff('second', last_ingest, now64(9)) AS transport_age_seconds, argMax(event_time, ingested_time) AS source_time_for_latest_ingest, dateDiff('millisecond', source_time_for_latest_ingest, last_ingest) AS source_to_ingest_ms FROM ir.raw_events WHERE range_id = '{{ ludus_ch_ui_range_id }}' AND source_host = 'k3s-vuln' AND source_type IN ('kubernetes_audit', 'tetragon', 'container_log', 'vector_internal') GROUP BY source_type ORDER BY source_type",
+      "config": {"chartType": "table"},
+      "layout_x": 0, "layout_y": 25, "layout_w": 12, "layout_h": 5
+    }
+  ]
+}

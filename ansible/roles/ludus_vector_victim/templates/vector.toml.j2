@@ -1,0 +1,88 @@
+data_dir = "/var/lib/vector"
+
+[sources.kubernetes_audit]
+type = "file"
+include = ["{{ ludus_vector_victim_kubernetes_audit_path }}"]
+read_from = "end"
+max_line_bytes = 10485760
+
+[sources.kubernetes_audit.fingerprint]
+strategy = "device_and_inode"
+
+[sources.tetragon]
+type = "file"
+include = {{ ludus_vector_victim_tetragon_globs | to_json }}
+read_from = "end"
+max_line_bytes = 10485760
+
+[sources.tetragon.fingerprint]
+strategy = "device_and_inode"
+
+[sources.container_logs]
+type = "file"
+include = ["{{ ludus_vector_victim_container_glob }}"]
+exclude = {{ ludus_vector_victim_container_excludes | to_json }}
+read_from = "end"
+max_line_bytes = 10485760
+
+[sources.container_logs.fingerprint]
+strategy = "device_and_inode"
+
+[sources.vector_internal_logs]
+type = "internal_logs"
+
+[transforms.kubernetes_audit_envelope]
+type = "remap"
+inputs = ["kubernetes_audit"]
+source = '''
+.source_type = "kubernetes_audit"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_victim_range_id }}"
+'''
+
+[transforms.tetragon_envelope]
+type = "remap"
+inputs = ["tetragon"]
+source = '''
+.source_type = "tetragon"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_victim_range_id }}"
+'''
+
+[transforms.container_envelope]
+type = "remap"
+inputs = ["container_logs"]
+source = '''
+.source_type = "container_log"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_victim_range_id }}"
+'''
+
+[transforms.internal_log_envelope]
+type = "remap"
+inputs = ["vector_internal_logs"]
+source = '''
+.source_type = "vector_internal"
+.source_host = "{{ ansible_hostname }}"
+.range_id = "{{ ludus_vector_victim_range_id }}"
+'''
+
+[sinks.central_vector]
+type = "vector"
+inputs = ["kubernetes_audit_envelope", "tetragon_envelope", "container_envelope"]
+address = "{{ ludus_vector_victim_aggregator_address }}"
+version = "2"
+
+[sinks.central_vector.acknowledgements]
+enabled = true
+
+[sinks.central_vector.buffer]
+type = "disk"
+max_size = {{ ludus_vector_victim_disk_buffer_bytes }}
+when_full = "block"
+
+[sinks.central_vector_health]
+type = "vector"
+inputs = ["internal_log_envelope"]
+address = "{{ ludus_vector_victim_aggregator_address }}"
+version = "2"

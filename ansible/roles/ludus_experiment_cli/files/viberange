@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  experiment)
+    shift
+    exec /usr/local/bin/viberange-experiment "$@"
+    ;;
+  help|-h|--help|"")
+    cat <<'EOF'
+Usage: viberange experiment <start|status|stop|abort> [options]
+
+Participant range commands are intentionally limited to approved workshop
+workflows. Ludus infrastructure administration remains instructor-owned.
+EOF
+    ;;
+  *)
+    echo "unknown VibeRange command: $1" >&2
+    exit 2
+    ;;
+esac

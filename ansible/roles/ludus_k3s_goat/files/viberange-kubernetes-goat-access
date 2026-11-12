@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${KUBECONFIG:?KUBECONFIG must identify the k3s configuration}"
+
+namespaces=(default default default default default default big-monolith)
+labels=(build-code health-check internal-proxy system-monitor kubernetes-goat-home poor-registry hunger-check)
+local_ports=(1230 1231 1232 1233 1234 1235 1236)
+target_ports=(3000 80 3000 8080 80 5000 8080)
+pids=()
+
+cleanup() {
+  if ((${#pids[@]})); then
+    kill "${pids[@]}" 2>/dev/null || true
+    wait "${pids[@]}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# k3s.service becoming active does not mean its API, kubelet streaming backend,
+# or workshop applications are ready. Starting port-forward too early produces
+# kubelet 502 errors; probing an application before it listens can also make
+# kubectl terminate that forward. Gate on the node and target pods, then
+# supervise each forward independently until its application accepts traffic.
+kubectl version --request-timeout=10s >/dev/null
+kubectl wait --for=condition=Ready node --all --timeout=180s >/dev/null
+node=$(kubectl get nodes --output jsonpath='{.items[0].metadata.name}')
+kubelet_ready=false
+for _ in $(seq 1 180); do
+  if [[ $(kubectl get --raw "/api/v1/nodes/$node/proxy/healthz" 2>/dev/null || true) == ok ]]; then
+    kubelet_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$kubelet_ready" != true ]]; then
+  echo "Kubernetes node streaming backend did not become healthy" >&2
+  exit 1
+fi
+
+pods=()
+for index in "${!local_ports[@]}"; do
+  namespace=${namespaces[$index]}
+  label=${labels[$index]}
+  target_port=${target_ports[$index]}
+  pod=""
+  for _ in $(seq 1 120); do
+    pod=$(kubectl get pods \
+      --namespace "$namespace" \
+      --selector "app=$label" \
+      --field-selector status.phase=Running \
+      --output jsonpath='{.items[0].metadata.name}')
+    [[ -n "$pod" ]] && break
+    sleep 1
+  done
+  if [[ -z "$pod" ]]; then
+    echo "No running Kubernetes Goat pod found for $namespace/app=$label" >&2
+    exit 1
+  fi
+
+  kubectl --namespace "$namespace" wait \
+    --for=condition=Ready "pod/$pod" --timeout=180s >/dev/null
+  pods+=("$pod")
+done
+
+forward_forever() {
+  local namespace=$1 pod=$2 local_port=$3 target_port=$4 child=""
+  trap '[[ -z "$child" ]] || kill "$child" 2>/dev/null || true; exit 0' EXIT INT TERM
+  while true; do
+    kubectl --namespace "$namespace" port-forward \
+      "pod/$pod" --address 0.0.0.0 "$local_port:$target_port" &
+    child=$!
+    wait "$child" 2>/dev/null || true
+    child=""
+    sleep 1
+  done
+}
+
+for index in "${!local_ports[@]}"; do
+  forward_forever \
+    "${namespaces[$index]}" "${pods[$index]}" \
+    "${local_ports[$index]}" "${target_ports[$index]}" &
+  pids+=("$!")
+done
+
+for index in "${!local_ports[@]}"; do
+  port=${local_ports[$index]}
+  pid=${pids[$index]}
+  ready=false
+  for _ in $(seq 1 180); do
+    kill -0 "$pid" 2>/dev/null || break
+    if timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$ready" != true ]]; then
+    echo "Kubernetes Goat access port $port did not become ready" >&2
+    exit 1
+  fi
+done
+
+echo "Kubernetes Goat access ports 1230-1236 are ready"
+
+# A port-forward is expected to run indefinitely. Any child exit means the
+# complete set may be inconsistent, so fail and let systemd recreate all seven.
+set +e
+wait -n "${pids[@]}"
+set -e
+echo "A Kubernetes Goat port-forward exited; restarting the complete set" >&2
+exit 1

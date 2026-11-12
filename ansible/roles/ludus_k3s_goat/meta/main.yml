@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: ludus_k3s_goat
+  author: VibeRange
+  description: Install k3s, audit telemetry, and Kubernetes Goat for Ludus experiments
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [all]
+dependencies: []

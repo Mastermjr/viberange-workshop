@@ -1,0 +1,12 @@
+---
+id: c0a1de4a-701d-4c9a-b541-936ff3871205
+name: VibeRange k8s-goat-attack 1.0.0
+description: One fact-driven atomic operation from Goat service discovery through privileged system-monitor access, host control, and non-destructive k3s cluster-administration proof.
+atomic_ordering:
+  - c0a1de4a-701d-4c9a-b541-936ff3871000
+  - c0a1de4a-701d-4c9a-b541-936ff3871002
+  - c0a1de4a-701d-4c9a-b541-936ff3871005
+  - c0a1de4a-701d-4c9a-b541-936ff3871008
+  - c0a1de4a-701d-4c9a-b541-936ff3871009
+  - c0a1de4a-701d-4c9a-b541-936ff3871010
+  - c0a1de4a-701d-4c9a-b541-936ff3871011

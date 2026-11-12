@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: ludus_router_evidence
+  namespace: VibeRange
+  author: Mastermjr
+  description: Capture run-bounded router PCAP, replay it through Zeek, and publish sealed artifact evidence
+  license: NOASSERTION
+  min_ansible_version: "2.15"
+dependencies: []

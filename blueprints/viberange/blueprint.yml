@@ -1,0 +1,15 @@
+manifest_version: 1
+id: viberange
+name: "VibeRange"
+description: "Complete three-workload Ludus purple-team range with progressive workshop role deployment."
+version: 0.11.14
+config: range-config.yml
+
+tags:
+  - workshop
+  - purple-team
+  - kubernetes
+  - detection-engineering
+
+# Minimum release validated by the project; newer Ludus versions require normal release testing.
+min_ludus_version: "2.1.2"
