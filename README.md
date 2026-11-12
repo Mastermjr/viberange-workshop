@@ -69,6 +69,8 @@ results; Vector, router capture and Zeek, Kubernetes audit, Tetragon, and
 container logs provide independent evidence. ClickHouse keeps the source-native
 records used by CH-UI and Jupyter.
 
+[Jump to the participant perspective and analyst-interface access details.](#analyst-interfaces)
+
 ### Range VMs
 
 | System | Network role | Purpose |
@@ -321,6 +323,8 @@ Replace `<range-number>` with the number in the participant assignment. Connect 
 - **CH-UI:** log in with username `default` and leave the password field blank.
 
 CH-UI, JupyterLab, and Caldera are participant-facing interfaces permitted only from the assigned WireGuard client. Direct participant access to Kubernetes Goat remains denied; the bounded experiment reaches it from the attacker VLAN. Proxmox and Ludus administration remain instructor-only.
+
+For the participant workflow, including terminal commands and screenshots of an executed notebook, see [Run the experiment and reconstruction notebook in JupyterLab](docs/jupyterlab-participant-workflow.md).
 
 # Ludus blueprint design
 
